@@ -12,7 +12,7 @@ const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server, {
   cors: { origin: '*' },
-  maxHttpBufferSize: 20e6,  // 20 MB — audio blobs
+  maxHttpBufferSize: 20e6,
   pingTimeout: 60000,
   pingInterval: 25000,
 });
@@ -20,13 +20,52 @@ const io     = new Server(server, {
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-const GRACE_MS   = 5 * 60 * 1000; // 5-minute disconnect grace
-const GUESS_SECS = 45;
-const NOISE_RECORD_SECS = 5;    // hold-to-record max for creator
-const NOISE_MIMIC_SECS  = 5;    // hold-to-record max for mimics
-const MIMIC_SUBMIT_SECS = 35;   // window for all mimics to come in
+// ── Constants ──────────────────────────────────────────────────────────────
+const GRACE_MS              = 5 * 60 * 1000;
+const GUESS_SECS            = 45;
+const NOISE_RECORD_SECS     = 5;
+const NOISE_MIMIC_SECS      = 5;
+const MIMIC_SUBMIT_SECS     = 35;
+const IMPOSTER_VOTE_SECS    = 40;
+const TELEPHONE_REVEAL_SECS = 30;
+const TELEPHONE_VOTE_SECS   = 30;
 
+// ── Content pools ──────────────────────────────────────────────────────────
+const IMPOSTER_PROMPTS = [
+  "The fuzzy caterpillar ate seventeen pancakes before sunrise",
+  "I secretly replaced all the chairs with inflatable flamingos",
+  "My neighbour's hamster knows how to operate a blender",
+  "The mayor decided to tax all left-handed pasta",
+  "A suspicious pigeon stole my library card and three stamps",
+  "Grandma keeps her socks in the microwave for warmth",
+  "The local dentist moonlights as a professional cheese sculptor",
+  "We found a submarine in the school swimming pool",
+  "My alarm clock only wakes me up when it feels like it",
+  "Three invisible geese were spotted arguing outside the post office",
+  "He insisted the moon was made of forgotten birthday cakes",
+  "The supermarket replaced all trolleys with electric scooters",
+];
+
+const TELEPHONE_PHRASES = [
+  "Crispy purple dinosaur dancing at midnight",
+  "My uncle sold twelve umbrellas to a confused penguin",
+  "The robot chef burned every meal except the ice cream",
+  "Seven tiny clouds floated through the living room window",
+  "A polite shark apologised and returned the stolen surfboard",
+  "Grandmother's secret ingredient is exactly four rubber bands",
+  "The invisible man forgot where he parked his bicycle",
+  "Forty-two monkeys organised a peaceful protest outside the library",
+  "The suspicious mailman only delivers letters on leap years",
+  "Whoever invented glitter should be held accountable by law",
+  "Professor Biscuit declared Tuesdays illegal for most vegetables",
+  "A raccoon stole my passport and opened a small café",
+];
+
+const IMPOSTER_EFFECTS = ['helium', 'demon', 'robot', 'walkie'];
+
+function randItem(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+// ── Helpers ────────────────────────────────────────────────────────────────
 function randCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let c = '';
@@ -38,11 +77,8 @@ function shuffle(arr) { return [...arr].sort(() => Math.random() - 0.5); }
 
 function getCelebs(category, count = 5, exclude = []) {
   let pool;
-  if (category === 'mixed') {
-    pool = Object.values(CELEBS).flat();
-  } else {
-    pool = CELEBS[category] || Object.values(CELEBS).flat();
-  }
+  if (category === 'mixed') pool = Object.values(CELEBS).flat();
+  else pool = CELEBS[category] || Object.values(CELEBS).flat();
   return shuffle(pool.filter(c => !exclude.includes(c))).slice(0, count);
 }
 
@@ -76,63 +112,98 @@ function fuzzyMatch(guess, target) {
   return levenshtein(g, t) / Math.max(g.length, t.length) < 0.35;
 }
 
+// ── Name hint (progressive letter reveal for Mode 1) ──────────────────────
+function seededShuffle(arr, seed) {
+  const a = [...arr];
+  let s = seed;
+  for (let i = a.length - 1; i > 0; i--) {
+    s = (s * 1664525 + 1013904223) & 0xffffffff;
+    const j = Math.abs(s) % (i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function computeNameHint(name, timeLeftMs) {
+  const timeLeft = timeLeftMs / 1000;
+  const letters = [];
+  for (let i = 0; i < name.length; i++) {
+    if (/[a-zA-Z]/.test(name[i])) letters.push(i);
+  }
+  if (timeLeft > 30) return name.split('').map(c => /[a-zA-Z]/.test(c) ? '_' : c).join('');
+  const progress = Math.max(0, (30 - timeLeft) / 30);
+  const revealCount = Math.min(letters.length, Math.floor(progress * 0.4 * letters.length + 0.5));
+  const seed = name.split('').reduce((a, c, i) => a + c.charCodeAt(0) * (i + 1), 0);
+  const shuffled = seededShuffle(letters, seed);
+  const revealed = new Set(shuffled.slice(0, revealCount));
+  return name.split('').map((c, i) => /[a-zA-Z]/.test(c) ? (revealed.has(i) ? c : '_') : c).join('');
+}
+
 // ── Room factory ──────────────────────────────────────────────────────────
 function mkRoom(code, hostId) {
   return {
-    code,
-    hostId,
-    mode:          'reverse',  // 'reverse' | 'noise'
-    roundCount:    10,
-    currentRound:  0,
-    phase:         'lobby',
-    players:       new Map(),  // playerId → player
-    speakerOrder:  [],
-    speakerIdx:    0,
-    // reverse-voice state
-    selectedCat:      null,
-    selectedCeleb:    null,
-    speakerAudio:     null,
-    guesses:          new Map(), // playerId → {guess,correct,points,time}
-    usedCelebs:       [],
-    // noise-mimic state
-    creatorAudio:     null,
-    mimics:           new Map(), // playerId → {audio,score,commentary}
-    // timers
-    phaseTimer:    null,
-    phaseEndEpoch: null,
-    roundResult:   null,
+    code, hostId,
+    mode: 'reverse',  // 'reverse' | 'noise' | 'imposter' | 'telephone'
+    roundCount: 10,
+    currentRound: 0,
+    phase: 'lobby',
+    players: new Map(),
+    speakerOrder: [],
+    speakerIdx: 0,
+    // Mode 1 — Reverse Voice
+    selectedCat: null, selectedCeleb: null, speakerAudio: null,
+    guesses: new Map(), usedCelebs: [],
+    // Mode 2 — Noise Mimic
+    creatorAudio: null, mimics: new Map(),
+    // Mode 3 — Voice Disguise
+    imposterId: null, imposterPrompt: null, imposterEffect: null,
+    imposterAudio: null, votes: new Map(),
+    // Mode 4 — Broken Telephone
+    telephoneChain: [], telephoneCurrentIdx: 0,
+    telephonePrompt: null, telephoneRecordings: [],
+    telephoneVotesAccurate: new Map(), telephoneVotesBlunder: new Map(),
+    // Timers
+    phaseTimer: null, phaseEndEpoch: null, roundResult: null, hintInterval: null,
   };
 }
 
 function mkPlayer(id, socketId, name, isHost) {
-  return { id, socketId, name, isHost, score: 0, connected: true,
-           ready: false, disconnectTimer: null };
+  return { id, socketId, name, isHost, score: 0, connected: true, ready: false, disconnectTimer: null };
 }
 
 function snapshot(room) {
   return {
-    code:          room.code,
-    hostId:        room.hostId,
-    mode:          room.mode,
-    roundCount:    room.roundCount,
-    currentRound:  room.currentRound,
-    phase:         room.phase,
-    players:       [...room.players.values()].map(p => ({
+    code: room.code, hostId: room.hostId, mode: room.mode,
+    roundCount: room.roundCount, currentRound: room.currentRound, phase: room.phase,
+    players: [...room.players.values()].map(p => ({
       id: p.id, name: p.name, score: p.score,
       connected: p.connected, ready: p.ready, isHost: p.isHost,
     })),
-    speakerOrder:  room.speakerOrder,
-    speakerIdx:    room.speakerIdx,
-    selectedCat:   room.selectedCat,
-    phaseEndEpoch: room.phaseEndEpoch,
-    roundResult:   room.roundResult,
-    // Send audio when guesser needs it
-    speakerAudio:  ['guessing'].includes(room.phase) ? room.speakerAudio : null,
-    creatorAudio:  ['noise_mimic'].includes(room.phase) ? room.creatorAudio : null,
+    speakerOrder: room.speakerOrder, speakerIdx: room.speakerIdx,
+    selectedCat: room.selectedCat, phaseEndEpoch: room.phaseEndEpoch, roundResult: room.roundResult,
+    // Mode 1
+    speakerAudio: room.phase === 'guessing' ? room.speakerAudio : null,
+    // Mode 2
+    creatorAudio: room.phase === 'noise_mimic' ? room.creatorAudio : null,
     mimics: room.phase === 'round_result' && room.mode === 'noise'
       ? Object.fromEntries([...room.mimics.entries()].map(([id,m]) =>
           [id, { score: m.score, commentary: m.commentary, audio: m.audio }]))
       : null,
+    // Mode 3
+    imposterAudio: room.phase === 'imposter_vote' ? room.imposterAudio : null,
+    imposterEffect: ['imposter_vote','round_result'].includes(room.phase) ? room.imposterEffect : null,
+    imposterId: room.phase === 'round_result' && room.mode === 'imposter' ? room.imposterId : null,
+    votesIn: room.phase === 'imposter_vote' ? room.votes.size : null,
+    // Mode 4
+    telephoneChain: room.telephoneChain,
+    telephoneCurrentIdx: room.telephoneCurrentIdx,
+    telephoneRecordings: ['telephone_reveal','telephone_vote','round_result'].includes(room.phase) && room.mode === 'telephone'
+      ? room.telephoneRecordings.map(r => ({ pid: r.pid, name: r.name, audio: r.audio }))
+      : room.telephoneRecordings.map(r => ({ pid: r.pid, name: r.name })),
+    telephonePrompt: ['telephone_reveal','telephone_vote','round_result'].includes(room.phase)
+      ? room.telephonePrompt : null,
+    telephoneVotesAccurateIn: room.phase === 'telephone_vote' ? room.telephoneVotesAccurate.size : null,
+    telephoneVotesBlunderIn:  room.phase === 'telephone_vote' ? room.telephoneVotesBlunder.size  : null,
   };
 }
 
@@ -142,7 +213,8 @@ const rooms = new Map();
 function roomOf(socket) { return rooms.get(socket.roomCode); }
 
 function clearPhaseTimer(room) {
-  if (room.phaseTimer) { clearTimeout(room.phaseTimer); room.phaseTimer = null; }
+  if (room.phaseTimer)  { clearTimeout(room.phaseTimer);   room.phaseTimer  = null; }
+  if (room.hintInterval){ clearInterval(room.hintInterval); room.hintInterval = null; }
 }
 
 function setPhaseTimer(room, ms, fn) {
@@ -157,109 +229,170 @@ function broadcastRoom(room) {
 
 function startRound(room) {
   room.currentRound++;
-  room.guesses.clear();
-  room.mimics.clear();
-  room.speakerAudio  = null;
-  room.creatorAudio  = null;
-  room.selectedCeleb = null;
-  room.selectedCat   = null;
-  room.roundResult   = null;
+  room.guesses.clear(); room.mimics.clear(); room.votes.clear();
+  room.speakerAudio = null; room.creatorAudio = null;
+  room.selectedCeleb = null; room.selectedCat = null; room.roundResult = null;
+  room.imposterId = null; room.imposterPrompt = null; room.imposterEffect = null; room.imposterAudio = null;
+  room.telephoneCurrentIdx = 0; room.telephoneRecordings = []; room.telephonePrompt = null;
+  room.telephoneVotesAccurate.clear(); room.telephoneVotesBlunder.clear();
 
   if (room.mode === 'reverse') {
-    // Rotate speaker
     room.speakerIdx = (room.currentRound - 1) % room.speakerOrder.length;
     room.phase = 'speaker_cat';
     broadcastRoom(room);
-    // Send speaker their private notification
     const speaker = room.players.get(room.speakerOrder[room.speakerIdx]);
     if (speaker) io.to(speaker.socketId).emit('you_are_speaker', {});
-  } else {
-    // Rotate noise creator
+
+  } else if (room.mode === 'noise') {
     room.speakerIdx = (room.currentRound - 1) % room.speakerOrder.length;
     room.phase = 'noise_record';
     room.phaseEndEpoch = null;
     broadcastRoom(room);
     const creator = room.players.get(room.speakerOrder[room.speakerIdx]);
     if (creator) io.to(creator.socketId).emit('you_are_creator', {});
+
+  } else if (room.mode === 'imposter') {
+    room.speakerIdx = (room.currentRound - 1) % room.speakerOrder.length;
+    room.imposterId = room.speakerOrder[room.speakerIdx];
+    room.imposterPrompt = randItem(IMPOSTER_PROMPTS);
+    room.imposterEffect = randItem(IMPOSTER_EFFECTS);
+    room.phase = 'imposter_record';
+    broadcastRoom(room);
+    const imposter = room.players.get(room.imposterId);
+    if (imposter) io.to(imposter.socketId).emit('you_are_imposter', {
+      prompt: room.imposterPrompt, effect: room.imposterEffect,
+    });
+
+  } else if (room.mode === 'telephone') {
+    room.telephoneChain = [...room.speakerOrder];
+    room.telephonePrompt = randItem(TELEPHONE_PHRASES);
+    room.telephoneCurrentIdx = 0;
+    room.phase = 'telephone_chain';
+    broadcastRoom(room);
+    const first = room.players.get(room.telephoneChain[0]);
+    if (first) io.to(first.socketId).emit('telephone_prompt', {
+      prompt: room.telephonePrompt, chainIdx: 0, chainLength: room.telephoneChain.length,
+    });
   }
 }
 
+// ── Mode 1 helpers ─────────────────────────────────────────────────────────
 function endGuessing(room) {
   clearPhaseTimer(room);
-  const guessers = room.speakerOrder.filter(id => id !== room.speakerOrder[room.speakerIdx]);
   const anyCorrect = [...room.guesses.values()].some(g => g.correct);
-
   if (!anyCorrect) {
-    // Speaker stumps — +80 to speaker
-    const spId = room.speakerOrder[room.speakerIdx];
-    const sp = room.players.get(spId);
+    const sp = room.players.get(room.speakerOrder[room.speakerIdx]);
     if (sp) sp.score += 80;
   }
-
   const entries = [...room.guesses.entries()].map(([pid, g]) => ({
-    playerId: pid,
-    name: room.players.get(pid)?.name ?? '?',
-    guess: g.guess,
-    correct: g.correct,
-    points: g.points,
+    playerId: pid, name: room.players.get(pid)?.name ?? '?',
+    guess: g.guess, correct: g.correct, points: g.points,
   }));
-
   room.roundResult = {
     celebrity: room.selectedCeleb,
     speakerId: room.speakerOrder[room.speakerIdx],
     speakerName: room.players.get(room.speakerOrder[room.speakerIdx])?.name ?? '',
-    stumped: !anyCorrect,
-    guesses: entries,
+    stumped: !anyCorrect, guesses: entries,
     scores: [...room.players.values()].map(p => ({ id:p.id, name:p.name, score:p.score })),
   };
-
   room.phase = 'round_result';
   broadcastRoom(room);
-
-  // Auto-advance after 8s unless host clicks next
   setPhaseTimer(room, 8000, () => advanceFromResult(room));
 }
 
+// ── Mode 2 helpers ─────────────────────────────────────────────────────────
 function finalizeMimics(room) {
   clearPhaseTimer(room);
   room.phase = 'noise_scoring';
   broadcastRoom(room);
-
   const creatorId = room.speakerOrder[room.speakerIdx];
   const b64Orig   = room.creatorAudio;
-
-  // Score each mimic
   const scored = [];
   for (const [pid, mimic] of room.mimics) {
     const score      = b64Orig ? compareSounds(b64Orig, mimic.audio) : Math.floor(Math.random()*60+20);
     const commentary = getCommentary(score);
-    mimic.score      = score;
-    mimic.commentary = commentary;
-    const player = room.players.get(pid);
-    scored.push({ pid, score, name: player?.name ?? '?' });
+    mimic.score = score; mimic.commentary = commentary;
+    scored.push({ pid, score, name: room.players.get(pid)?.name ?? '?' });
   }
-
-  // Sort by score desc — accuracy score IS the points earned
   scored.sort((a, b) => b.score - a.score);
-  scored.forEach(s => {
-    const p = room.players.get(s.pid);
-    if (p) p.score += s.score;
-  });
-
+  scored.forEach(s => { const p = room.players.get(s.pid); if (p) p.score += s.score; });
   room.roundResult = {
-    creatorId,
-    creatorName:  room.players.get(creatorId)?.name ?? '',
+    creatorId, creatorName: room.players.get(creatorId)?.name ?? '',
     ranking: scored.map((s, i) => ({
-      rank: i + 1,
-      playerId: s.pid,
-      name: s.name,
-      score: s.score,
-      commentary: room.mimics.get(s.pid)?.commentary ?? '',
-      points: s.score,
+      rank: i+1, playerId: s.pid, name: s.name, score: s.score,
+      commentary: room.mimics.get(s.pid)?.commentary ?? '', points: s.score,
     })),
     scores: [...room.players.values()].map(p => ({ id:p.id, name:p.name, score:p.score })),
   };
+  room.phase = 'round_result';
+  broadcastRoom(room);
+  setPhaseTimer(room, 10000, () => advanceFromResult(room));
+}
 
+// ── Mode 3 helpers ─────────────────────────────────────────────────────────
+function finalizeImposterVote(room) {
+  clearPhaseTimer(room);
+  const voteCount = new Map();
+  for (const tid of room.votes.values())
+    voteCount.set(tid, (voteCount.get(tid) || 0) + 1);
+  const totalVotes = room.votes.size;
+  const votesAgainst = voteCount.get(room.imposterId) || 0;
+  const caught = totalVotes > 0 && votesAgainst > totalVotes / 2;
+  const imposter = room.players.get(room.imposterId);
+  if (!caught && imposter) imposter.score += 100;
+  for (const [vid, tid] of room.votes) {
+    if (tid === room.imposterId) { const p = room.players.get(vid); if (p) p.score += 75; }
+  }
+  const voteList = [...room.votes.entries()].map(([vid, tid]) => ({
+    voterId: vid, voterName: room.players.get(vid)?.name ?? '?',
+    targetId: tid, targetName: room.players.get(tid)?.name ?? '?',
+  }));
+  room.roundResult = {
+    imposterId: room.imposterId, imposterName: imposter?.name ?? '?',
+    imposterCaught: caught, prompt: room.imposterPrompt, effect: room.imposterEffect,
+    voteList, voteCount: Object.fromEntries(voteCount),
+    scores: [...room.players.values()].map(p => ({ id:p.id, name:p.name, score:p.score })),
+  };
+  room.phase = 'round_result';
+  broadcastRoom(room);
+  setPhaseTimer(room, 10000, () => advanceFromResult(room));
+}
+
+// ── Mode 4 helpers ─────────────────────────────────────────────────────────
+function finalizeTelephone(room) {
+  clearPhaseTimer(room);
+  room.phase = 'telephone_reveal';
+  broadcastRoom(room);
+  setPhaseTimer(room, TELEPHONE_REVEAL_SECS * 1000, () => {
+    room.phase = 'telephone_vote';
+    broadcastRoom(room);
+    setPhaseTimer(room, TELEPHONE_VOTE_SECS * 1000, () => finalizeTelephoneVote(room));
+  });
+}
+
+function finalizeTelephoneVote(room) {
+  clearPhaseTimer(room);
+  const accCount = new Map(), blnCount = new Map();
+  for (const pid of room.telephoneVotesAccurate.values())
+    accCount.set(pid, (accCount.get(pid) || 0) + 1);
+  for (const pid of room.telephoneVotesBlunder.values())
+    blnCount.set(pid, (blnCount.get(pid) || 0) + 1);
+
+  let mostAccPid = null, maxAcc = 0;
+  for (const [pid, n] of accCount) if (n > maxAcc) { maxAcc = n; mostAccPid = pid; }
+  let blunderPid = null, maxBln = 0;
+  for (const [pid, n] of blnCount) if (n > maxBln) { maxBln = n; blunderPid = pid; }
+
+  if (mostAccPid) { const p = room.players.get(mostAccPid); if (p) p.score += 50; }
+  if (blunderPid) { const p = room.players.get(blunderPid); if (p) p.score += 25; }
+
+  room.roundResult = {
+    originalPhrase: room.telephonePrompt,
+    chain: room.telephoneRecordings.map(r => ({ pid: r.pid, name: r.name })),
+    mostAccPid, mostAccName: mostAccPid ? room.players.get(mostAccPid)?.name : null,
+    blunderPid, blunderName: blunderPid ? room.players.get(blunderPid)?.name : null,
+    scores: [...room.players.values()].map(p => ({ id:p.id, name:p.name, score:p.score })),
+  };
   room.phase = 'round_result';
   broadcastRoom(room);
   setPhaseTimer(room, 10000, () => advanceFromResult(room));
@@ -267,16 +400,12 @@ function finalizeMimics(room) {
 
 function advanceFromResult(room) {
   clearPhaseTimer(room);
-  if (room.currentRound >= room.roundCount) {
-    endGame(room);
-  } else {
-    startRound(room);
-  }
+  if (room.currentRound >= room.roundCount) endGame(room);
+  else startRound(room);
 }
 
 function endGame(room) {
-  const sorted = [...room.players.values()]
-    .sort((a, b) => b.score - a.score);
+  const sorted = [...room.players.values()].sort((a, b) => b.score - a.score);
   room.phase = 'final';
   room.roundResult = {
     podium: sorted.slice(0, 3).map((p, i) => ({ rank: i+1, name: p.name, score: p.score })),
@@ -288,54 +417,41 @@ function endGame(room) {
 // ── Socket ────────────────────────────────────────────────────────────────
 io.on('connection', socket => {
 
-  // ── Join / Create ───────────────────────────────────────────────────────
+  // ── Join / Create ──────────────────────────────────────────────────────
   socket.on('create_room', ({ playerName }) => {
     const name = String(playerName || 'Player').trim().slice(0, 20);
     let code;
     do { code = randCode(); } while (rooms.has(code));
-
     const playerId = uuid();
     const room     = mkRoom(code, playerId);
     const player   = mkPlayer(playerId, socket.id, name, true);
     room.players.set(playerId, player);
     rooms.set(code, room);
-
-    socket.roomCode = code;
-    socket.playerId = playerId;
+    socket.roomCode = code; socket.playerId = playerId;
     socket.join(code);
-
     socket.emit('room_created', { playerId, room: snapshot(room) });
   });
 
   socket.on('join_room', ({ roomCode, playerName }) => {
     const code = String(roomCode || '').toUpperCase().trim().replace(/[^A-Z0-9]/g,'');
     const name = String(playerName || 'Player').trim().slice(0, 20);
-
     if (!rooms.has(code)) { socket.emit('join_error', { msg: 'Room not found.' }); return; }
     const room = rooms.get(code);
-    if (room.players.size >= 8 && ![...room.players.values()].find(p => p.name === name)) {
-      socket.emit('join_error', { msg: 'Room is full (max 8).' }); return;
-    }
-    if (room.phase !== 'lobby') {
-      socket.emit('join_error', { msg: 'Game already in progress.' }); return;
-    }
-
+    if (room.players.size >= 8) { socket.emit('join_error', { msg: 'Room is full (max 8).' }); return; }
+    if (room.phase !== 'lobby') { socket.emit('join_error', { msg: 'Game already in progress.' }); return; }
     const playerId = uuid();
     const player   = mkPlayer(playerId, socket.id, name, false);
     room.players.set(playerId, player);
-    socket.roomCode = code;
-    socket.playerId = playerId;
+    socket.roomCode = code; socket.playerId = playerId;
     socket.join(code);
-
     socket.emit('room_joined', { playerId, room: snapshot(room) });
     socket.to(code).emit('room_snapshot', snapshot(room));
   });
 
-  // ── Reconnect ───────────────────────────────────────────────────────────
+  // ── Reconnect ──────────────────────────────────────────────────────────
   socket.on('rejoin', ({ playerId, roomCode }) => {
     const room = rooms.get(roomCode);
     if (!room) { socket.emit('rejoin_failed', { msg: 'Room expired.' }); return; }
-
     const player = room.players.get(playerId);
     if (!player) { socket.emit('rejoin_failed', { msg: 'Session not found.' }); return; }
 
@@ -343,33 +459,43 @@ io.on('connection', socket => {
     player.disconnectTimer = null;
     player.socketId = socket.id;
     player.connected = true;
-
-    socket.roomCode = roomCode;
-    socket.playerId = playerId;
+    socket.roomCode = roomCode; socket.playerId = playerId;
     socket.join(roomCode);
 
     socket.emit('rejoin_success', { playerId, room: snapshot(room) });
     socket.to(roomCode).emit('player_reconnected', { playerId, name: player.name });
     broadcastRoom(room);
 
-    // Re-send private role notification if mid-round
+    // Re-send private role events
     if (['speaker_cat','speaker_celeb','speaker_record'].includes(room.phase)) {
-      if (room.speakerOrder[room.speakerIdx] === playerId)
-        socket.emit('you_are_speaker', {});
+      if (room.speakerOrder[room.speakerIdx] === playerId) socket.emit('you_are_speaker', {});
     }
-    if (room.phase === 'noise_record') {
-      if (room.speakerOrder[room.speakerIdx] === playerId)
-        socket.emit('you_are_creator', {});
-    }
-    if (room.phase === 'guessing' && room.speakerAudio) {
+    if (room.phase === 'noise_record' && room.speakerOrder[room.speakerIdx] === playerId)
+      socket.emit('you_are_creator', {});
+    if (room.phase === 'guessing' && room.speakerAudio)
       socket.emit('reversed_audio', { audioBase64: room.speakerAudio });
-    }
-    if (room.phase === 'noise_mimic' && room.creatorAudio) {
+    if (room.phase === 'noise_mimic' && room.creatorAudio)
       socket.emit('creator_audio', { audioBase64: room.creatorAudio });
+    if (room.phase === 'imposter_record' && room.imposterId === playerId)
+      socket.emit('you_are_imposter', { prompt: room.imposterPrompt, effect: room.imposterEffect });
+    if (room.phase === 'imposter_vote' && room.imposterAudio)
+      socket.emit('imposter_audio_relay', { audioBase64: room.imposterAudio, effect: room.imposterEffect });
+    if (room.phase === 'telephone_chain') {
+      const myIdx = room.telephoneChain.indexOf(playerId);
+      if (myIdx === room.telephoneCurrentIdx) {
+        if (myIdx === 0) {
+          socket.emit('telephone_prompt', { prompt: room.telephonePrompt, chainIdx: 0, chainLength: room.telephoneChain.length });
+        } else if (room.telephoneRecordings[myIdx - 1]) {
+          socket.emit('telephone_listen', {
+            audioBase64: room.telephoneRecordings[myIdx - 1].audio,
+            chainIdx: myIdx, chainLength: room.telephoneChain.length,
+          });
+        }
+      }
     }
   });
 
-  // ── Lobby controls ──────────────────────────────────────────────────────
+  // ── Lobby controls ─────────────────────────────────────────────────────
   socket.on('set_ready', ({ ready }) => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'lobby') return;
@@ -382,7 +508,7 @@ io.on('connection', socket => {
   socket.on('host_set_mode', ({ mode }) => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'lobby' || room.hostId !== socket.playerId) return;
-    if (['reverse','noise'].includes(mode)) { room.mode = mode; broadcastRoom(room); }
+    if (['reverse','noise','imposter','telephone'].includes(mode)) { room.mode = mode; broadcastRoom(room); }
   });
 
   socket.on('host_set_rounds', ({ count }) => {
@@ -395,25 +521,22 @@ io.on('connection', socket => {
   socket.on('host_start', () => {
     const room = roomOf(socket);
     if (!room || room.hostId !== socket.playerId) return;
-    if (room.players.size < 2) {
-      socket.emit('error_msg', { msg: 'Need at least 2 players.' }); return;
-    }
+    if (room.players.size < 2) { socket.emit('error_msg', { msg: 'Need at least 2 players.' }); return; }
     room.speakerOrder = shuffle([...room.players.keys()]);
     room.currentRound = 0;
     startRound(room);
   });
 
-  // ── Mode 1 — Reverse Voice ──────────────────────────────────────────────
+  // ── Mode 1 — Reverse Voice ─────────────────────────────────────────────
   socket.on('select_category', ({ category }) => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'speaker_cat') return;
     if (room.speakerOrder[room.speakerIdx] !== socket.playerId) return;
     const valid = ['footballers','singers','actors','internet','mixed'];
     if (!valid.includes(category)) return;
-
     room.selectedCat = category;
-    const options    = getCelebs(category, 5, room.usedCelebs);
-    room.phase       = 'speaker_celeb';
+    const options = getCelebs(category, 5, room.usedCelebs);
+    room.phase = 'speaker_celeb';
     broadcastRoom(room);
     socket.emit('celeb_options', { options });
   });
@@ -422,7 +545,6 @@ io.on('connection', socket => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'speaker_celeb') return;
     if (room.speakerOrder[room.speakerIdx] !== socket.playerId) return;
-
     room.selectedCeleb = celeb;
     room.usedCelebs.push(celeb);
     room.phase = 'speaker_record';
@@ -434,21 +556,20 @@ io.on('connection', socket => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'speaker_record') return;
     if (room.speakerOrder[room.speakerIdx] !== socket.playerId) return;
-
     room.speakerAudio = audioBase64;
-    room.phase        = 'guessing';
+    room.phase = 'guessing';
     broadcastRoom(room);
-
-    // Send reversed audio to all non-speakers
     const spId = socket.playerId;
     for (const p of room.players.values()) {
-      if (p.id !== spId && p.connected) {
-        io.to(p.socketId).emit('reversed_audio', { audioBase64 });
-      }
+      if (p.id !== spId && p.connected) io.to(p.socketId).emit('reversed_audio', { audioBase64 });
     }
-
-    // 45-second guess window
     setPhaseTimer(room, GUESS_SECS * 1000, () => endGuessing(room));
+    // Progressive letter hint every second once timer < 30s
+    room.hintInterval = setInterval(() => {
+      if (room.phase !== 'guessing') { clearInterval(room.hintInterval); room.hintInterval = null; return; }
+      const timeLeft = Math.max(0, room.phaseEndEpoch - Date.now());
+      io.to(room.code).emit('name_hint', { hint: computeNameHint(room.selectedCeleb, timeLeft) });
+    }, 1000);
   });
 
   socket.on('submit_guess', ({ guess }) => {
@@ -456,50 +577,34 @@ io.on('connection', socket => {
     if (!room || room.phase !== 'guessing') return;
     if (room.speakerOrder[room.speakerIdx] === socket.playerId) return;
     if (room.guesses.has(socket.playerId)) return;
-
-    const player      = room.players.get(socket.playerId);
+    const player = room.players.get(socket.playerId);
     if (!player) return;
-    const correct     = fuzzyMatch(guess, room.selectedCeleb);
+    const correct = fuzzyMatch(guess, room.selectedCeleb);
     const firstCorrect = correct && ![...room.guesses.values()].some(g => g.correct);
-    const points      = correct ? (firstCorrect ? 100 : 60) : 0;
+    const points = correct ? (firstCorrect ? 100 : 60) : 0;
     if (points) player.score += points;
-
     room.guesses.set(socket.playerId, { guess, correct, points, time: Date.now() });
-    io.to(room.code).emit('guess_in', {
-      playerId: socket.playerId, name: player.name,
-      correct, firstCorrect, points,
-    });
-
-    // All guessers submitted?
-    const numGuessers = room.speakerOrder.length - 1;
-    if (room.guesses.size >= numGuessers) endGuessing(room);
+    io.to(room.code).emit('guess_in', { playerId: socket.playerId, name: player.name, correct, firstCorrect, points });
+    if (room.guesses.size >= room.speakerOrder.length - 1) endGuessing(room);
   });
 
   // ── Mode 2 — Noise Mimic ───────────────────────────────────────────────
   socket.on('creator_audio', ({ audioBase64 }, ack) => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'noise_record') {
-      if (typeof ack === 'function') ack({ err: 'Wrong phase' });
-      return;
+      if (typeof ack === 'function') ack({ err: 'Wrong phase' }); return;
     }
     if (room.speakerOrder[room.speakerIdx] !== socket.playerId) {
-      if (typeof ack === 'function') ack({ err: 'Not your turn' });
-      return;
+      if (typeof ack === 'function') ack({ err: 'Not your turn' }); return;
     }
-
     room.creatorAudio = audioBase64;
-    room.phase        = 'noise_mimic';
+    room.phase = 'noise_mimic';
     if (typeof ack === 'function') ack({ ok: true });
     broadcastRoom(room);
-
-    // Send to all non-creators
     const crId = socket.playerId;
     for (const p of room.players.values()) {
-      if (p.id !== crId && p.connected) {
-        io.to(p.socketId).emit('creator_audio', { audioBase64 });
-      }
+      if (p.id !== crId && p.connected) io.to(p.socketId).emit('creator_audio', { audioBase64 });
     }
-
     setPhaseTimer(room, MIMIC_SUBMIT_SECS * 1000, () => finalizeMimics(room));
   });
 
@@ -508,15 +613,72 @@ io.on('connection', socket => {
     if (!room || room.phase !== 'noise_mimic') return;
     if (room.speakerOrder[room.speakerIdx] === socket.playerId) return;
     if (room.mimics.has(socket.playerId)) return;
-
     room.mimics.set(socket.playerId, { audio: audioBase64, score: 0, commentary: '' });
-    io.to(room.code).emit('mimic_in', { playerId: socket.playerId,
-      name: room.players.get(socket.playerId)?.name ?? '?',
-      audioBase64 });
+    io.to(room.code).emit('mimic_in', {
+      playerId: socket.playerId, name: room.players.get(socket.playerId)?.name ?? '?', audioBase64,
+    });
+    if (room.mimics.size >= room.speakerOrder.length - 1) finalizeMimics(room);
+  });
 
-    // All mimics in?
-    const expected = room.speakerOrder.length - 1;
-    if (room.mimics.size >= expected) finalizeMimics(room);
+  // ── Mode 3 — Voice Disguise / Imposter ────────────────────────────────
+  socket.on('imposter_audio', ({ audioBase64 }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'imposter_record') return;
+    if (room.imposterId !== socket.playerId) return;
+    room.imposterAudio = audioBase64;
+    room.phase = 'imposter_vote';
+    broadcastRoom(room); // snapshot includes imposterAudio for everyone
+    setPhaseTimer(room, IMPOSTER_VOTE_SECS * 1000, () => finalizeImposterVote(room));
+  });
+
+  socket.on('cast_imposter_vote', ({ targetId }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'imposter_vote') return;
+    if (room.votes.has(socket.playerId)) return;
+    if (!room.players.has(targetId)) return;
+    room.votes.set(socket.playerId, targetId);
+    broadcastRoom(room);
+    if (room.votes.size >= room.players.size) finalizeImposterVote(room);
+  });
+
+  // ── Mode 4 — Broken Telephone ──────────────────────────────────────────
+  socket.on('telephone_audio', ({ audioBase64 }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'telephone_chain') return;
+    if (room.telephoneChain[room.telephoneCurrentIdx] !== socket.playerId) return;
+    const player = room.players.get(socket.playerId);
+    room.telephoneRecordings.push({ pid: socket.playerId, name: player?.name ?? '?', audio: audioBase64 });
+    const nextIdx = room.telephoneCurrentIdx + 1;
+    if (nextIdx < room.telephoneChain.length) {
+      room.telephoneCurrentIdx = nextIdx;
+      broadcastRoom(room);
+      const next = room.players.get(room.telephoneChain[nextIdx]);
+      if (next) io.to(next.socketId).emit('telephone_listen', {
+        audioBase64, chainIdx: nextIdx, chainLength: room.telephoneChain.length,
+      });
+    } else {
+      finalizeTelephone(room);
+    }
+  });
+
+  socket.on('telephone_vote_accurate', ({ targetPid }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'telephone_vote') return;
+    if (room.telephoneVotesAccurate.has(socket.playerId)) return;
+    room.telephoneVotesAccurate.set(socket.playerId, targetPid);
+    broadcastRoom(room);
+    if (room.telephoneVotesAccurate.size >= room.players.size &&
+        room.telephoneVotesBlunder.size  >= room.players.size) finalizeTelephoneVote(room);
+  });
+
+  socket.on('telephone_vote_blunder', ({ targetPid }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'telephone_vote') return;
+    if (room.telephoneVotesBlunder.has(socket.playerId)) return;
+    room.telephoneVotesBlunder.set(socket.playerId, targetPid);
+    broadcastRoom(room);
+    if (room.telephoneVotesAccurate.size >= room.players.size &&
+        room.telephoneVotesBlunder.size  >= room.players.size) finalizeTelephoneVote(room);
   });
 
   // ── Round navigation ───────────────────────────────────────────────────
@@ -532,10 +694,8 @@ io.on('connection', socket => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'final') return;
     if (room.hostId !== socket.playerId) return;
-    // Reset scores
     for (const p of room.players.values()) { p.score = 0; p.ready = false; }
-    room.currentRound = 0;
-    room.usedCelebs   = [];
+    room.currentRound = 0; room.usedCelebs = [];
     room.speakerOrder = shuffle([...room.players.keys()]);
     startRound(room);
   });
@@ -545,18 +705,17 @@ io.on('connection', socket => {
     if (!room || room.phase !== 'final') return;
     if (room.hostId !== socket.playerId) return;
     for (const p of room.players.values()) { p.score = 0; p.ready = false; }
-    room.currentRound = 0;
-    room.usedCelebs   = [];
-    room.phase        = 'lobby';
+    room.currentRound = 0; room.usedCelebs = [];
+    room.phase = 'lobby';
     clearPhaseTimer(room);
     broadcastRoom(room);
   });
 
-  // ── Kick / Leave ───────────────────────────────────────────────────────────
+  // ── Kick / Leave ───────────────────────────────────────────────────────
   socket.on('kick_player', ({ targetId }) => {
     const room = roomOf(socket);
     if (!room || room.hostId !== socket.playerId) return;
-    if (targetId === room.hostId) return; // can't kick host
+    if (targetId === room.hostId) return;
     const target = room.players.get(targetId);
     if (!target) return;
     if (target.disconnectTimer) { clearTimeout(target.disconnectTimer); target.disconnectTimer = null; }
@@ -583,19 +742,20 @@ io.on('connection', socket => {
     broadcastRoom(room);
   });
 
-  // Force any player back to lobby view (host only, any phase)
   socket.on('force_lobby', () => {
     const room = roomOf(socket);
     if (!room || room.hostId !== socket.playerId) return;
     clearPhaseTimer(room);
     for (const p of room.players.values()) { p.score = 0; p.ready = false; }
-    room.currentRound = 0;
-    room.usedCelebs   = [];
-    room.phase        = 'lobby';
-    room.speakerAudio = null;
-    room.creatorAudio = null;
-    room.selectedCeleb = null;
-    room.roundResult  = null;
+    room.currentRound = 0; room.usedCelebs = [];
+    room.phase = 'lobby';
+    room.speakerAudio = null; room.creatorAudio = null;
+    room.selectedCeleb = null; room.roundResult = null;
+    room.votes.clear();
+    room.imposterId = null; room.imposterAudio = null; room.imposterPrompt = null; room.imposterEffect = null;
+    room.telephoneChain = []; room.telephoneCurrentIdx = 0;
+    room.telephoneRecordings = []; room.telephonePrompt = null;
+    room.telephoneVotesAccurate.clear(); room.telephoneVotesBlunder.clear();
     broadcastRoom(room);
   });
 
@@ -608,11 +768,9 @@ io.on('connection', socket => {
     player.connected = false;
     socket.to(room.code).emit('player_disconnected', { playerId: player.id, name: player.name });
     broadcastRoom(room);
-
     player.disconnectTimer = setTimeout(() => {
       room.players.delete(player.id);
       if (room.players.size === 0) { rooms.delete(room.code); return; }
-      // Re-assign host if needed
       if (room.hostId === player.id) {
         const next = room.players.values().next().value;
         if (next) { next.isHost = true; room.hostId = next.id; }
