@@ -1249,7 +1249,30 @@ function initSocket(onReady) {
   });
 
   s.on('room_snapshot', room => {
+    const prevPhase = G.room?.phase;
     G.room = room;
+
+    // Recompute roles from authoritative speakerOrder every snapshot
+    const spId = room.speakerOrder?.[room.speakerIdx];
+    if (['speaker_cat','speaker_celeb','speaker_record','guessing'].includes(room.phase)) {
+      G.isSpeaker = (spId === G.myId);
+      G.isCreator = false;
+    } else if (['noise_record','noise_mimic'].includes(room.phase)) {
+      G.isCreator = (spId === G.myId);
+      G.isSpeaker = false;
+    } else {
+      G.isSpeaker = false;
+      G.isCreator = false;
+    }
+
+    // Clear stale audio buffers at round boundaries
+    if (room.phase === 'speaker_cat' || room.phase === 'noise_record') {
+      G.speakerBuf = null;
+      G.creatorBuf = null;
+      G.guessSubmitted = false;
+      G.mimicSubmitted = false;
+    }
+
     renderPhase();
   });
 
@@ -1262,6 +1285,7 @@ function initSocket(onReady) {
   // ── Private role notifications ───────────────────────────────
   s.on('you_are_speaker', () => {
     G.isSpeaker = true; G.isCreator = false;
+    // room_snapshot already rendered; this is a fallback in case it arrived first
     if (G.room?.phase === 'speaker_cat') showSpeakerCatSelect();
   });
 
