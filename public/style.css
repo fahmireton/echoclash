@@ -179,6 +179,7 @@ input::placeholder { color: var(--text3); }
 .role-banner.guesser  { background: rgba(0,212,255,.12); border: 1px solid rgba(0,212,255,.35); color: var(--blue); }
 .role-banner.creator  { background: rgba(57,255,20,.10); border: 1px solid rgba(57,255,20,.3);  color: var(--green); }
 .role-banner.mimic    { background: rgba(191,0,255,.12); border: 1px solid rgba(191,0,255,.35); color: var(--purple); }
+.category-hint { text-align: center; font-size: .88rem; color: var(--text2); background: rgba(255,215,0,.08); border: 1px solid rgba(255,215,0,.25); border-radius: var(--radius-sm); padding: 7px 14px; margin: 0 0 4px; }
 
 /* ── Round badge ──────────────────────────────────────────────────────────── */
 .round-badge { text-align: center; font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 2.5px; color: var(--text3); }

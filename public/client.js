@@ -660,6 +660,7 @@ function showSpeakerWaiting() {
     <div class="screen">
       ${roundBadge()}
       <div class="role-banner speaker">🎙️ Speaker</div>
+      ${G.room.selectedCat ? `<div class="category-hint">Category: <strong>${esc(G.room.selectedCat === 'mixed' ? 'Mixed — All Categories' : G.room.selectedCat.charAt(0).toUpperCase() + G.room.selectedCat.slice(1))}</strong></div>` : ''}
       <div class="wait-center">
         <div class="wait-icon">😈</div>
         <h2>Opponents are guessing…</h2>
@@ -692,6 +693,7 @@ function showGuesserTurn(audioBuf) {
     <div class="screen">
       ${roundBadge()}
       <div class="role-banner guesser">👂 You are a Guesser</div>
+      ${G.room.selectedCat ? `<div class="category-hint">Category: <strong>${esc(G.room.selectedCat === 'mixed' ? 'Mixed — All Categories' : G.room.selectedCat.charAt(0).toUpperCase() + G.room.selectedCat.slice(1))}</strong></div>` : ''}
       <div class="card card-glow-blue">
         <h3>Step 1 — Listen to reversed audio</h3>
         <div id="rev-player"></div>
