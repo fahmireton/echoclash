@@ -1,0 +1,42 @@
+{
+  "footballers": [
+    "Lionel Messi", "Cristiano Ronaldo", "Kylian Mbappé", "Erling Haaland",
+    "Neymar Jr", "Zinedine Zidane", "Ronaldinho", "Luka Modrić",
+    "Jude Bellingham", "Kevin De Bruyne", "Son Heung-min", "Bukayo Saka",
+    "Mohamed Salah", "Karim Benzema", "Vinicius Jr", "Robert Lewandowski",
+    "Thierry Henry", "Ronaldo Nazario", "Roberto Carlos", "Zlatan Ibrahimović",
+    "Wayne Rooney", "David Beckham", "Pelé", "Xavi Hernández",
+    "Andrés Iniesta", "Paolo Maldini", "Harry Kane", "Marcus Rashford",
+    "Phil Foden", "Trent Alexander-Arnold", "Virgil van Dijk", "Joshua Kimmich"
+  ],
+  "singers": [
+    "Taylor Swift", "Ariana Grande", "Justin Bieber", "Drake",
+    "Michael Jackson", "Billie Eilish", "Bruno Mars", "The Weeknd",
+    "Rihanna", "Adele", "Ed Sheeran", "Beyoncé",
+    "Eminem", "Dua Lipa", "Harry Styles", "Freddie Mercury",
+    "Lady Gaga", "Selena Gomez", "Post Malone", "Bad Bunny",
+    "Shakira", "Cardi B", "Nicki Minaj", "Travis Scott",
+    "Kanye West", "Kendrick Lamar", "Olivia Rodrigo", "Doja Cat",
+    "Sam Smith", "Justin Timberlake", "Mariah Carey", "Madonna",
+    "David Bowie", "Lizzo", "SZA", "Charlie Puth"
+  ],
+  "actors": [
+    "Leonardo DiCaprio", "Tom Cruise", "Zendaya", "Ryan Reynolds",
+    "Margot Robbie", "Robert Downey Jr", "Dwayne Johnson", "Keanu Reeves",
+    "Cillian Murphy", "Pedro Pascal", "Timothée Chalamet", "Emma Stone",
+    "Meryl Streep", "Denzel Washington", "Will Smith", "Brad Pitt",
+    "Angelina Jolie", "Tom Hanks", "Johnny Depp", "Scarlett Johansson",
+    "Jennifer Lawrence", "Chris Evans", "Chris Hemsworth", "Idris Elba",
+    "Samuel L Jackson", "Morgan Freeman", "Sandra Bullock", "Anne Hathaway",
+    "Natalie Portman", "Joaquin Phoenix", "Adam Sandler", "Jennifer Aniston"
+  ],
+  "internet": [
+    "MrBeast", "Gordon Ramsay", "Elon Musk", "Kim Kardashian",
+    "Kylie Jenner", "PewDiePie", "Ninja", "Logan Paul",
+    "Jake Paul", "KSI", "Charli D'Amelio", "Addison Rae",
+    "Khaby Lame", "David Dobrik", "Emma Chamberlain", "Markiplier",
+    "Jacksepticeye", "Lilly Singh", "James Charles", "Bella Poarch",
+    "Cody Ko", "Danny Gonzalez", "Valkyrae", "Pokimane",
+    "Corpse Husband", "Dream", "GeorgeNotFound", "Technoblade"
+  ]
+}
