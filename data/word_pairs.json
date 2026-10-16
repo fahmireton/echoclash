@@ -1,0 +1,66 @@
+{
+  "everyday": [
+    ["Coffee", "Tea"], ["Chair", "Sofa"], ["Phone", "Tablet"], ["Pen", "Pencil"],
+    ["Lamp", "Candle"], ["Book", "Magazine"], ["Clock", "Watch"], ["Pillow", "Cushion"],
+    ["Fridge", "Freezer"], ["Shampoo", "Conditioner"], ["Toothbrush", "Toothpaste"],
+    ["Mirror", "Window"], ["Door", "Gate"], ["Carpet", "Rug"], ["Curtain", "Blinds"],
+    ["Drawer", "Cabinet"], ["Fork", "Spoon"], ["Plate", "Bowl"], ["Mug", "Cup"],
+    ["Scissors", "Knife"], ["Bag", "Backpack"], ["Wallet", "Purse"], ["Keys", "Keycard"],
+    ["Umbrella", "Raincoat"], ["Calendar", "Planner"], ["Headphones", "Earbuds"],
+    ["Charger", "Battery"], ["Soap", "Sanitizer"], ["Blanket", "Duvet"], ["Bin", "Basket"]
+  ],
+  "food": [
+    ["Pizza", "Burger"], ["Apple", "Pear"], ["Sushi", "Sashimi"], ["Cake", "Pie"],
+    ["Milk", "Juice"], ["Bread", "Toast"], ["Pasta", "Noodles"], ["Salad", "Coleslaw"],
+    ["Chocolate", "Caramel"], ["Ice Cream", "Gelato"], ["Cookie", "Biscuit"],
+    ["Steak", "Lamb Chop"], ["Taco", "Burrito"], ["Soup", "Stew"],
+    ["Sandwich", "Wrap"], ["Pancake", "Waffle"], ["Donut", "Bagel"],
+    ["Popcorn", "Crisps"], ["Mango", "Pineapple"], ["Lemon", "Lime"],
+    ["Beer", "Wine"], ["Smoothie", "Milkshake"], ["Cheese", "Butter"],
+    ["Honey", "Jam"], ["Bacon", "Ham"], ["Egg", "Omelette"],
+    ["Chips", "Fries"], ["Cereal", "Granola"], ["Soda", "Lemonade"], ["Curry", "Stew"]
+  ],
+  "places": [
+    ["Beach", "Pool"], ["Forest", "Jungle"], ["Museum", "Gallery"],
+    ["Airport", "Train Station"], ["School", "University"], ["Hospital", "Clinic"],
+    ["Gym", "Park"], ["Mall", "Market"], ["Library", "Bookshop"],
+    ["Cinema", "Theatre"], ["Restaurant", "Café"], ["Church", "Mosque"],
+    ["Stadium", "Arena"], ["Zoo", "Aquarium"], ["Mountain", "Hill"],
+    ["River", "Lake"], ["Desert", "Savannah"], ["City", "Town"],
+    ["Castle", "Palace"], ["Farm", "Ranch"], ["Island", "Peninsula"],
+    ["Bank", "Post Office"], ["Hotel", "Hostel"], ["Harbour", "Port"],
+    ["Prison", "Court"]
+  ],
+  "animals": [
+    ["Dog", "Cat"], ["Lion", "Tiger"], ["Dolphin", "Whale"], ["Eagle", "Hawk"],
+    ["Rabbit", "Hare"], ["Horse", "Donkey"], ["Frog", "Toad"], ["Crab", "Lobster"],
+    ["Elephant", "Rhino"], ["Penguin", "Seal"], ["Butterfly", "Moth"],
+    ["Crocodile", "Alligator"], ["Gorilla", "Chimpanzee"], ["Deer", "Antelope"],
+    ["Parrot", "Macaw"], ["Spider", "Scorpion"], ["Shark", "Barracuda"],
+    ["Turtle", "Tortoise"], ["Fox", "Wolf"], ["Bear", "Panda"],
+    ["Jellyfish", "Octopus"], ["Lizard", "Gecko"], ["Swan", "Flamingo"],
+    ["Bee", "Wasp"], ["Pigeon", "Seagull"]
+  ],
+  "pop_culture": [
+    ["Harry Potter", "Hermione Granger"], ["Batman", "Superman"],
+    ["Minecraft", "Roblox"], ["Netflix", "Disney Plus"],
+    ["Instagram", "TikTok"], ["iPhone", "Samsung"], ["Nike", "Adidas"],
+    ["McDonalds", "Burger King"], ["Coca-Cola", "Pepsi"], ["Google", "Bing"],
+    ["Spotify", "Apple Music"], ["Twitter", "Threads"], ["PlayStation", "Xbox"],
+    ["Fortnite", "PUBG"], ["Marvel", "DC"], ["Star Wars", "Star Trek"],
+    ["Friends", "The Office"], ["Taylor Swift", "Beyoncé"],
+    ["Stranger Things", "Wednesday"], ["YouTube", "Twitch"],
+    ["Reddit", "Quora"], ["WhatsApp", "Telegram"], ["Amazon", "eBay"],
+    ["Tesla", "Ferrari"], ["Hogwarts", "Narnia"]
+  ],
+  "sports": [
+    ["Football", "Rugby"], ["Tennis", "Badminton"], ["Swimming", "Diving"],
+    ["Basketball", "Volleyball"], ["Golf", "Cricket"], ["Boxing", "MMA"],
+    ["Cycling", "Triathlon"], ["Skiing", "Snowboarding"], ["Baseball", "Softball"],
+    ["Table Tennis", "Squash"], ["Gymnastics", "Acrobatics"],
+    ["Rowing", "Kayaking"], ["Wrestling", "Judo"], ["Archery", "Fencing"],
+    ["Surfing", "Wakeboarding"], ["Skateboarding", "BMX"],
+    ["Weightlifting", "Powerlifting"], ["Ice Hockey", "Field Hockey"],
+    ["Handball", "Water Polo"], ["Running", "Walking"]
+  ]
+}

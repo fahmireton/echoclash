@@ -6,7 +6,9 @@ const { Server } = require('socket.io');
 const path     = require('path');
 const { v4: uuid } = require('uuid');
 const { compareSounds, getCommentary } = require('./audioCompare');
-const CELEBS   = require('./data/celebrities.json');
+const CELEBS        = require('./data/celebrities.json');
+const WORD_PAIRS_RAW  = require('./data/word_pairs.json');
+const WORD_PAIRS_FLAT = Object.values(WORD_PAIRS_RAW).flat();
 
 const app    = express();
 const server = http.createServer(app);
@@ -29,6 +31,11 @@ const MIMIC_SUBMIT_SECS     = 35;
 const IMPOSTER_VOTE_SECS    = 40;
 const TELEPHONE_REVEAL_SECS = 30;
 const TELEPHONE_VOTE_SECS   = 30;
+const WI_REVEAL_SECS  = 30;
+const WI_CLUE_SECS    = 30;
+const WI_DISCUSS_SECS = 90;
+const WI_VOTE_SECS    = 35;
+const WI_GUESS_SECS   = 20;
 
 // ── Content pools ──────────────────────────────────────────────────────────
 const IMPOSTER_PROMPTS = [
@@ -162,6 +169,13 @@ function mkRoom(code, hostId) {
     telephoneChain: [], telephoneCurrentIdx: 0,
     telephonePrompt: null, telephoneRecordings: [],
     telephoneVotesAccurate: new Map(), telephoneVotesBlunder: new Map(),
+    // Mode 5 — Word Imposter
+    wiImpostorCount: 1, wiUndercoverMode: false,
+    wiCivilianWord: null, wiImposterWord: null,
+    wiAssignments: new Map(), wiWords: new Map(),
+    wiClueOrder: [], wiCurrentClueIdx: 0,
+    wiClues: new Map(), wiVotes: new Map(),
+    wiEliminated: [], wiCycleCount: 0, wiMaxCycles: 3,
     // Timers
     phaseTimer: null, phaseEndEpoch: null, roundResult: null, hintInterval: null,
   };
@@ -204,6 +218,15 @@ function snapshot(room) {
       ? room.telephonePrompt : null,
     telephoneVotesAccurateIn: room.phase === 'telephone_vote' ? room.telephoneVotesAccurate.size : null,
     telephoneVotesBlunderIn:  room.phase === 'telephone_vote' ? room.telephoneVotesBlunder.size  : null,
+    // Mode 5
+    wiImpostorCount: room.wiImpostorCount,
+    wiUndercoverMode: room.wiUndercoverMode,
+    wiClueOrder: room.wiClueOrder,
+    wiCurrentClueIdx: room.wiCurrentClueIdx,
+    wiClues: Object.fromEntries(room.wiClues || []),
+    wiVotesIn: room.phase === 'wi_vote' ? room.wiVotes.size : null,
+    wiEliminated: room.wiEliminated || [],
+    wiCycleCount: room.wiCycleCount || 0,
   };
 }
 
@@ -235,6 +258,9 @@ function startRound(room) {
   room.imposterId = null; room.imposterPrompt = null; room.imposterEffect = null; room.imposterAudio = null;
   room.telephoneCurrentIdx = 0; room.telephoneRecordings = []; room.telephonePrompt = null;
   room.telephoneVotesAccurate.clear(); room.telephoneVotesBlunder.clear();
+  room.wiAssignments.clear(); room.wiWords.clear(); room.wiClues.clear(); room.wiVotes.clear();
+  room.wiEliminated = []; room.wiCycleCount = 0; room.wiCurrentClueIdx = 0; room.wiClueOrder = [];
+  room.wiCivilianWord = null; room.wiImposterWord = null;
 
   if (room.mode === 'reverse') {
     room.speakerIdx = (room.currentRound - 1) % room.speakerOrder.length;
@@ -262,6 +288,9 @@ function startRound(room) {
     if (imposter) io.to(imposter.socketId).emit('you_are_imposter', {
       prompt: room.imposterPrompt, effect: room.imposterEffect,
     });
+
+  } else if (room.mode === 'word_imposter') {
+    startWiGame(room);
 
   } else if (room.mode === 'telephone') {
     room.telephoneChain = [...room.speakerOrder];
@@ -398,6 +427,163 @@ function finalizeTelephoneVote(room) {
   setPhaseTimer(room, 10000, () => advanceFromResult(room));
 }
 
+// ── Mode 5 helpers ─────────────────────────────────────────────
+function startWiGame(room) {
+  const pair = randItem(WORD_PAIRS_FLAT);
+  room.wiCivilianWord = pair[0];
+  room.wiImposterWord = pair[1];
+
+  const pids = shuffle([...room.players.keys()]);
+  const numImpostors = Math.min(room.wiImpostorCount, Math.max(1, Math.floor(pids.length / 3)));
+  room.wiAssignments.clear(); room.wiWords.clear();
+  room.wiMaxCycles = Math.max(2, pids.length - 2);
+
+  let blankAssigned = false;
+  for (let i = 0; i < pids.length; i++) {
+    const pid = pids[i];
+    if (i < numImpostors) {
+      room.wiAssignments.set(pid, 'imposter');
+      room.wiWords.set(pid, room.wiImposterWord);
+    } else if (room.wiUndercoverMode && !blankAssigned) {
+      room.wiAssignments.set(pid, 'blank');
+      room.wiWords.set(pid, '');
+      blankAssigned = true;
+    } else {
+      room.wiAssignments.set(pid, 'civilian');
+      room.wiWords.set(pid, room.wiCivilianWord);
+    }
+  }
+
+  room.phase = 'wi_reveal';
+  broadcastRoom(room);
+  for (const [pid, role] of room.wiAssignments) {
+    const player = room.players.get(pid);
+    if (player && player.connected) {
+      io.to(player.socketId).emit('wi_role', { role, word: room.wiWords.get(pid) });
+    }
+  }
+  setPhaseTimer(room, WI_REVEAL_SECS * 1000, () => startWiClueCycle(room));
+}
+
+function startWiClueCycle(room) {
+  clearPhaseTimer(room);
+  room.wiClues.clear(); room.wiVotes.clear(); room.wiCurrentClueIdx = 0;
+  room.wiCycleCount++;
+  const alivePids = [...room.players.keys()].filter(pid => !room.wiEliminated.some(e => e.pid === pid));
+  room.wiClueOrder = shuffle(alivePids);
+  room.phase = 'wi_clue';
+  broadcastRoom(room);
+  advanceWiClue(room);
+}
+
+function advanceWiClue(room) {
+  if (room.wiCurrentClueIdx >= room.wiClueOrder.length) {
+    startWiDiscuss(room); return;
+  }
+  broadcastRoom(room);
+  const pid = room.wiClueOrder[room.wiCurrentClueIdx];
+  const player = room.players.get(pid);
+  if (player && player.connected) {
+    io.to(player.socketId).emit('wi_your_turn', { clueIdx: room.wiCurrentClueIdx });
+  }
+  setPhaseTimer(room, WI_CLUE_SECS * 1000, () => {
+    if (!room.wiClues.has(pid)) room.wiClues.set(pid, '…');
+    room.wiCurrentClueIdx++;
+    advanceWiClue(room);
+  });
+}
+
+function startWiDiscuss(room) {
+  clearPhaseTimer(room);
+  room.phase = 'wi_discuss';
+  broadcastRoom(room);
+  setPhaseTimer(room, WI_DISCUSS_SECS * 1000, () => startWiVote(room));
+}
+
+function startWiVote(room) {
+  clearPhaseTimer(room);
+  room.wiVotes.clear();
+  room.phase = 'wi_vote';
+  broadcastRoom(room);
+  setPhaseTimer(room, WI_VOTE_SECS * 1000, () => finalizeWiVote(room));
+}
+
+function finalizeWiVote(room) {
+  clearPhaseTimer(room);
+  const tally = new Map();
+  for (const tid of room.wiVotes.values()) tally.set(tid, (tally.get(tid) || 0) + 1);
+
+  let maxVotes = 0, eliminatedPid = null;
+  for (const [pid, n] of tally) if (n > maxVotes) { maxVotes = n; eliminatedPid = pid; }
+
+  if (eliminatedPid) {
+    const eliminatedPlayer = room.players.get(eliminatedPid);
+    const eliminatedRole   = room.wiAssignments.get(eliminatedPid);
+    room.wiEliminated.push({
+      pid: eliminatedPid,
+      name: eliminatedPlayer?.name || '?',
+      role: eliminatedRole,
+      word: room.wiWords.get(eliminatedPid),
+    });
+    for (const [voterPid, targetPid] of room.wiVotes) {
+      if (targetPid === eliminatedPid && eliminatedRole === 'imposter') {
+        const voter = room.players.get(voterPid);
+        if (voter) voter.score += 50;
+      }
+    }
+  }
+
+  const winner = checkWiWin(room);
+  if (winner) { endWiGame(room, winner); return; }
+  startWiClueCycle(room);
+}
+
+function checkWiWin(room) {
+  const alivePids = [...room.players.keys()].filter(pid => !room.wiEliminated.some(e => e.pid === pid));
+  const aliveImpostors = alivePids.filter(pid => room.wiAssignments.get(pid) === 'imposter');
+  const aliveCivs      = alivePids.filter(pid => room.wiAssignments.get(pid) !== 'imposter');
+  if (aliveImpostors.length === 0) return 'civilian';
+  if (aliveImpostors.length >= aliveCivs.length) return 'imposter';
+  if (room.wiCycleCount >= room.wiMaxCycles) return 'imposter';
+  return null;
+}
+
+function endWiGame(room, winner) {
+  clearPhaseTimer(room);
+  if (winner === 'imposter') {
+    const alivePids = [...room.players.keys()].filter(pid => !room.wiEliminated.some(e => e.pid === pid));
+    for (const pid of alivePids) {
+      if (room.wiAssignments.get(pid) === 'imposter') {
+        const p = room.players.get(pid);
+        if (p) p.score += 100;
+        if (p && p.connected) io.to(p.socketId).emit('wi_guess_prompt', {});
+      }
+    }
+    room.phase = 'wi_guess';
+    broadcastRoom(room);
+    setPhaseTimer(room, WI_GUESS_SECS * 1000, () => finalizeWiGame(room, winner, false));
+    return;
+  }
+  finalizeWiGame(room, winner, false);
+}
+
+function finalizeWiGame(room, winner, imposterGuessedCorrectly) {
+  clearPhaseTimer(room);
+  const assignments = [];
+  for (const [pid, role] of room.wiAssignments) {
+    const p = room.players.get(pid);
+    assignments.push({ pid, name: p?.name || '?', role, word: room.wiWords.get(pid) || '' });
+  }
+  room.roundResult = {
+    winner, civilianWord: room.wiCivilianWord, imposterWord: room.wiImposterWord,
+    assignments, eliminated: room.wiEliminated, imposterGuessedCorrectly,
+    scores: [...room.players.values()].map(p => ({ id: p.id, name: p.name, score: p.score })),
+  };
+  room.phase = 'round_result';
+  broadcastRoom(room);
+  setPhaseTimer(room, 12000, () => advanceFromResult(room));
+}
+
 function advanceFromResult(room) {
   clearPhaseTimer(room);
   if (room.currentRound >= room.roundCount) endGame(room);
@@ -480,6 +666,14 @@ io.on('connection', socket => {
       socket.emit('you_are_imposter', { prompt: room.imposterPrompt, effect: room.imposterEffect });
     if (room.phase === 'imposter_vote' && room.imposterAudio)
       socket.emit('imposter_audio_relay', { audioBase64: room.imposterAudio, effect: room.imposterEffect });
+    if (['wi_reveal','wi_clue','wi_discuss','wi_vote','wi_guess'].includes(room.phase)) {
+      if (room.wiAssignments.has(playerId)) {
+        socket.emit('wi_role', { role: room.wiAssignments.get(playerId), word: room.wiWords.get(playerId) });
+      }
+      if (room.phase === 'wi_clue' && room.wiClueOrder[room.wiCurrentClueIdx] === playerId) {
+        socket.emit('wi_your_turn', { clueIdx: room.wiCurrentClueIdx });
+      }
+    }
     if (room.phase === 'telephone_chain') {
       const myIdx = room.telephoneChain.indexOf(playerId);
       if (myIdx === room.telephoneCurrentIdx) {
@@ -508,7 +702,7 @@ io.on('connection', socket => {
   socket.on('host_set_mode', ({ mode }) => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'lobby' || room.hostId !== socket.playerId) return;
-    if (['reverse','noise','imposter','telephone'].includes(mode)) { room.mode = mode; broadcastRoom(room); }
+    if (['reverse','noise','imposter','telephone','word_imposter'].includes(mode)) { room.mode = mode; broadcastRoom(room); }
   });
 
   socket.on('host_set_rounds', ({ count }) => {
@@ -641,6 +835,55 @@ io.on('connection', socket => {
     if (room.votes.size >= room.players.size) finalizeImposterVote(room);
   });
 
+  // ── Mode 5 — Word Imposter ────────────────────────────────────
+  socket.on('wi_set_impostors', ({ count }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'lobby' || room.hostId !== socket.playerId) return;
+    const n = parseInt(count, 10);
+    if (n >= 1 && n <= 3) { room.wiImpostorCount = n; broadcastRoom(room); }
+  });
+
+  socket.on('wi_set_undercover', ({ enabled }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'lobby' || room.hostId !== socket.playerId) return;
+    room.wiUndercoverMode = !!enabled; broadcastRoom(room);
+  });
+
+  socket.on('wi_submit_clue', ({ clue }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'wi_clue') return;
+    if (room.wiClueOrder[room.wiCurrentClueIdx] !== socket.playerId) return;
+    if (room.wiClues.has(socket.playerId)) return;
+    const safeClue = String(clue || '').trim().slice(0, 50);
+    if (!safeClue) return;
+    room.wiClues.set(socket.playerId, safeClue);
+    clearPhaseTimer(room);
+    room.wiCurrentClueIdx++;
+    advanceWiClue(room);
+  });
+
+  socket.on('wi_vote', ({ targetPid }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'wi_vote') return;
+    if (room.wiVotes.has(socket.playerId)) return;
+    if (targetPid === socket.playerId) return;
+    if (room.wiEliminated.some(e => e.pid === targetPid)) return;
+    if (!room.players.has(targetPid)) return;
+    room.wiVotes.set(socket.playerId, targetPid);
+    broadcastRoom(room);
+    const alivePids = [...room.players.keys()].filter(pid => !room.wiEliminated.some(e => e.pid === pid));
+    if (room.wiVotes.size >= alivePids.length) finalizeWiVote(room);
+  });
+
+  socket.on('wi_imposter_guess', ({ guess }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'wi_guess') return;
+    if (room.wiAssignments.get(socket.playerId) !== 'imposter') return;
+    const correct = fuzzyMatch(guess, room.wiCivilianWord);
+    if (correct) { const p = room.players.get(socket.playerId); if (p) p.score += 75; }
+    finalizeWiGame(room, 'imposter', correct);
+  });
+
   // ── Mode 4 — Broken Telephone ──────────────────────────────────────────
   socket.on('telephone_audio', ({ audioBase64 }) => {
     const room = roomOf(socket);
@@ -756,6 +999,9 @@ io.on('connection', socket => {
     room.telephoneChain = []; room.telephoneCurrentIdx = 0;
     room.telephoneRecordings = []; room.telephonePrompt = null;
     room.telephoneVotesAccurate.clear(); room.telephoneVotesBlunder.clear();
+    room.wiAssignments.clear(); room.wiWords.clear(); room.wiClues.clear(); room.wiVotes.clear();
+    room.wiEliminated = []; room.wiCycleCount = 0; room.wiCurrentClueIdx = 0; room.wiClueOrder = [];
+    room.wiCivilianWord = null; room.wiImposterWord = null;
     broadcastRoom(room);
   });
 

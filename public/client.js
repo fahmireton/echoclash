@@ -51,6 +51,14 @@ const G = {
   telephoneVotedBlunder:  false,
   _myTelAccuratePid:      null,
   _myTelBlunderPid:       null,
+  // Mode 5 — Word Imposter
+  wiRole:           null,
+  wiWord:           null,
+  wiClueSubmitted:  false,
+  wiVoted:          false,
+  wiMyVotePid:      null,
+  wiGuessSubmitted: false,
+  _wiLastPhase:     null,
   // Mode 1 name hint
   nameHint:     null,
   // phase timers
@@ -461,6 +469,7 @@ function showLanding() {
           <span class="mode-pill">🔊 Noise Mimic</span>
           <span class="mode-pill">🕵️ Voice Disguise</span>
           <span class="mode-pill">📞 Broken Telephone</span>
+          <span class="mode-pill">🕵🏽 Word Imposter</span>
         </div>
       </div>
 
@@ -573,7 +582,7 @@ function showLobby() {
   const me     = room.players.find(p => p.id === G.myId);
   const canStart = amHost && room.players.length >= 2;
 
-  const modeLabel = { reverse:'🔀 Reverse Voice', noise:'🔊 Noise Mimic', imposter:'🕵️ Voice Disguise', telephone:'📞 Broken Telephone' };
+  const modeLabel = { reverse:'🔀 Reverse Voice', noise:'🔊 Noise Mimic', imposter:'🕵️ Voice Disguise', telephone:'📞 Broken Telephone', word_imposter:'🕵🏽 Word Imposter' };
 
   render(`
     <div class="screen">
@@ -628,7 +637,28 @@ function showLobby() {
             <span class="mode-card-name">Broken Telephone</span>
             <span class="mode-card-desc">Pass audio down the chain — how much distorts?</span>
           </button>
+          <button class="btn-mode-card mode-card-wide ${room.mode==='word_imposter'?'active':''}" id="mode-wi">
+            <span class="mode-card-icon">🕵🏽</span>
+            <span class="mode-card-name">Word Imposter</span>
+            <span class="mode-card-desc">Everyone has a secret word — one imposter has a different one. Find them!</span>
+          </button>
         </div>
+        ${room.mode==='word_imposter'?`
+        <div class="card wi-settings">
+          <h3>Word Imposter Settings</h3>
+          <div class="field">
+            <label>Number of Impostors</label>
+            <div class="wi-count-btns">
+              <button class="wi-count-btn ${room.wiImpostorCount===1?'active':''}" data-n="1">1</button>
+              <button class="wi-count-btn ${room.wiImpostorCount===2?'active':''}" data-n="2">2</button>
+              <button class="wi-count-btn ${room.wiImpostorCount===3?'active':''}" data-n="3">3</button>
+            </div>
+          </div>
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:.9rem;font-weight:600;color:var(--text2)">
+            <input type="checkbox" id="wi-undercover" ${room.wiUndercoverMode?'checked':''} style="width:18px;height:18px;cursor:pointer" />
+            Undercover Mode — one extra player gets a <em>blank</em> word
+          </label>
+        </div>`:''}
         <div class="field">
           <label>Rounds (2–20)</label>
           <input id="inp-rounds" type="number" min="2" max="20" value="${room.roundCount}" />
@@ -666,6 +696,12 @@ function showLobby() {
     $id('mode-noise').onclick = () => G.socket.emit('host_set_mode', { mode:'noise' });
     $id('mode-imp').onclick   = () => G.socket.emit('host_set_mode', { mode:'imposter' });
     $id('mode-tel').onclick   = () => G.socket.emit('host_set_mode', { mode:'telephone' });
+    $id('mode-wi').onclick    = () => G.socket.emit('host_set_mode', { mode:'word_imposter' });
+    document.querySelectorAll('.wi-count-btn').forEach(b => {
+      b.onclick = () => G.socket.emit('wi_set_impostors', { count: parseInt(b.dataset.n) });
+    });
+    const wiUc = $id('wi-undercover');
+    if (wiUc) wiUc.onchange = () => G.socket.emit('wi_set_undercover', { enabled: wiUc.checked });
     $id('inp-rounds').onchange = () => {
       const v = parseInt($id('inp-rounds').value, 10);
       if (v>=2 && v<=20) G.socket.emit('host_set_rounds', { count:v });
@@ -1394,6 +1430,231 @@ function showTelephoneVote() {
   startClientTimer(left,$id('t-bar'),$id('t-lbl'));
 }
 
+// ── MODE 5: Word Imposter — Reveal ───────────────────────────
+function showWiReveal() {
+  const room=G.room;
+  const roleLabel={'civilian':'👥 You are a Civilian','imposter':'🕵️ You are the Imposter!','blank':'❓ You are Undercover (no word)'};
+  const roleCls={'civilian':'wi-civilian','imposter':'wi-imposter','blank':'wi-blank'};
+  render(`
+    <div class="screen">
+      ${roundBadge()}
+      <div class="role-banner ${roleCls[G.wiRole]||'wi-civilian'}">${roleLabel[G.wiRole]||'Waiting…'}</div>
+      <div class="card card-glow-blue text-center">
+        <small style="color:var(--text3)">Your secret word</small>
+        ${G.wiWord
+          ?`<div class="wi-word-big">${esc(G.wiWord)}</div>`
+          :`<div class="wi-word-big wi-word-blank">???</div>`}
+        <p style="font-size:.83rem;color:var(--text2)">Memorise it — it disappears when clue giving starts. Don't reveal it directly!</p>
+      </div>
+      <div class="card text-center">
+        <p style="font-size:.88rem">Everyone is reading their word now…</p>
+        <div class="timer-bar-wrap" style="margin-top:8px"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
+        <div class="timer-label" id="t-lbl">30s</div>
+      </div>
+      ${scoreboardHTML()}
+    </div>
+  `);
+  const left=room.phaseEndEpoch?Math.max(0,(room.phaseEndEpoch-Date.now())/1000):30;
+  startClientTimer(left,$id('t-bar'),$id('t-lbl'));
+}
+
+// ── MODE 5: Word Imposter — Clue phase ───────────────────────
+function showWiClue() {
+  const room=G.room;
+  const myTurnPid=room.wiClueOrder?.[room.wiCurrentClueIdx];
+  const isMyTurn=myTurnPid===G.myId;
+  const curPlayer=room.players.find(p=>p.id===myTurnPid);
+  const total=room.wiClueOrder?.length||0;
+  const done=room.wiCurrentClueIdx||0;
+
+  const submittedClues=(room.wiClueOrder||[]).slice(0,done).map(pid=>{
+    const p=room.players.find(pl=>pl.id===pid);
+    const clue=room.wiClues?.[pid]||'?';
+    return `<div class="wi-clue-row"><span class="wi-clue-name">${esc(p?.name||'?')}</span><span class="wi-clue-text">"${esc(clue)}"</span></div>`;
+  }).join('');
+
+  render(`
+    <div class="screen wi-clue-screen">
+      ${roundBadge()}
+      <div class="role-banner ${G.wiRole==='imposter'?'wi-imposter':'wi-civilian'}">🗣️ Clue Phase — ${done}/${total} done</div>
+
+      ${isMyTurn&&!G.wiClueSubmitted?`
+      <div class="card card-glow-pink">
+        <h3>🎤 Your turn! Give one word:</h3>
+        <p style="font-size:.83rem;color:var(--text2)">One word only — hints you know the theme, without giving it away.</p>
+        <input id="wi-clue-inp" type="text" class="guess-input" placeholder="Your clue word…" maxlength="30" autocomplete="off" />
+        <button id="btn-wi-clue" class="btn-primary btn-full" disabled>Submit Clue 💬</button>
+        <div class="timer-bar-wrap" style="margin-top:4px"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
+        <div class="timer-label" id="t-lbl">30s</div>
+      </div>`:`
+      <div class="card text-center">
+        ${G.wiClueSubmitted?`<p style="color:var(--green);font-weight:700">✅ Clue submitted! Waiting for others…</p>`
+          :`<h3>🎤 ${esc(curPlayer?.name||'?')} is giving their clue…</h3>
+          <div class="spinner" style="margin:8px auto"></div>`}
+        <div class="timer-bar-wrap" style="margin-top:8px"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
+        <div class="timer-label" id="t-lbl">30s</div>
+      </div>`}
+
+      ${submittedClues?`
+      <div class="card">
+        <h3>Clues so far</h3>
+        <div class="wi-clues-list">${submittedClues}</div>
+      </div>`:''}
+
+      ${room.wiEliminated?.length?`
+      <div class="card" style="gap:6px">
+        <h3 style="font-size:.88rem;color:var(--text3)">Eliminated</h3>
+        ${room.wiEliminated.map(e=>`<div class="wi-elim-row">💀 ${esc(e.name)}</div>`).join('')}
+      </div>`:''}
+      ${scoreboardHTML()}
+    </div>
+  `);
+
+  if (isMyTurn&&!G.wiClueSubmitted) {
+    const inp=$id('wi-clue-inp'), btn=$id('btn-wi-clue');
+    setTimeout(()=>inp?.focus(),50);
+    inp.oninput=()=>{ btn.disabled=!inp.value.trim(); };
+    inp.onkeydown=e=>{ if(e.key==='Enter'&&!btn.disabled) submitWiClue(); };
+    btn.onclick=submitWiClue;
+  }
+  const left=room.phaseEndEpoch?Math.max(0,(room.phaseEndEpoch-Date.now())/1000):30;
+  startClientTimer(left,$id('t-bar'),$id('t-lbl'));
+}
+
+function submitWiClue() {
+  if (G.wiClueSubmitted) return;
+  const val=$id('wi-clue-inp')?.value.trim();
+  if (!val) return;
+  G.wiClueSubmitted=true;
+  const btn=$id('btn-wi-clue'); if(btn){btn.disabled=true;btn.textContent='Submitted! ⏳';}
+  G.socket.emit('wi_submit_clue',{clue:val});
+}
+
+// ── MODE 5: Word Imposter — Discuss ──────────────────────────
+function showWiDiscuss() {
+  const room=G.room;
+  const allClues=(room.wiClueOrder||[]).map(pid=>{
+    const p=room.players.find(pl=>pl.id===pid);
+    const clue=room.wiClues?.[pid]||'…';
+    return `<div class="wi-clue-row"><span class="wi-clue-name">${esc(p?.name||'?')}</span><span class="wi-clue-text">"${esc(clue)}"</span></div>`;
+  }).join('');
+
+  render(`
+    <div class="screen">
+      ${roundBadge()}
+      <div class="role-banner wi-discuss">💬 Discussion Time!</div>
+      <div class="card card-glow-blue">
+        <h3>All clues — Cycle ${room.wiCycleCount||1}</h3>
+        <div class="wi-clues-list">${allClues||'<p style="color:var(--text3)">No clues submitted.</p>'}</div>
+      </div>
+      ${room.wiEliminated?.length?`
+      <div class="card" style="gap:6px">
+        <h3 style="font-size:.88rem;color:var(--text3)">Previously eliminated</h3>
+        ${room.wiEliminated.map(e=>`<div class="wi-elim-row">💀 ${esc(e.name)}</div>`).join('')}
+      </div>`:''}
+      <div class="card text-center">
+        <p>Talk it out — who sounds like they have a different word?</p>
+        <div class="timer-bar-wrap" style="margin-top:8px"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
+        <div class="timer-label" id="t-lbl">90s</div>
+      </div>
+      ${scoreboardHTML()}
+    </div>
+  `);
+  const left=room.phaseEndEpoch?Math.max(0,(room.phaseEndEpoch-Date.now())/1000):90;
+  startClientTimer(left,$id('t-bar'),$id('t-lbl'));
+}
+
+// ── MODE 5: Word Imposter — Vote ──────────────────────────────
+function showWiVote() {
+  const room=G.room;
+  const alivePlayers=room.players.filter(p=>!room.wiEliminated?.some(e=>e.pid===p.id));
+  render(`
+    <div class="screen wi-vote-screen">
+      ${roundBadge()}
+      <div class="role-banner wi-imposter">🗳️ Vote to Eliminate!</div>
+      <div class="card">
+        <h3>Who is the imposter?</h3>
+        <p style="font-size:.83rem;color:var(--text3)">Votes in: <strong style="color:var(--text)">${room.wiVotesIn||0} / ${alivePlayers.length}</strong></p>
+        <div class="imposter-vote-grid">
+          ${alivePlayers.filter(p=>p.id!==G.myId).map((p,i)=>`
+            <button class="vote-player-btn ${G.wiMyVotePid===p.id?'voted':''}"
+              data-pid="${esc(p.id)}" ${G.wiVoted?'disabled':''}>
+              ${avatarHTML(p.name,i)}
+              <span>${esc(p.name)}</span>
+            </button>`).join('')}
+        </div>
+        ${G.wiVoted?`<p class="text-center" style="color:var(--green);font-weight:700;margin-top:8px">✅ Vote cast! Waiting for others…</p>`:''}
+      </div>
+      <div class="card">
+        <div class="timer-bar-wrap"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
+        <div class="timer-label" id="t-lbl">35s</div>
+      </div>
+      ${scoreboardHTML()}
+    </div>
+  `);
+  if (!G.wiVoted) {
+    document.querySelectorAll('.vote-player-btn').forEach(btn=>{
+      btn.onclick=()=>{
+        if(G.wiVoted) return;
+        G.wiVoted=true; G.wiMyVotePid=btn.dataset.pid;
+        G.socket.emit('wi_vote',{targetPid:btn.dataset.pid});
+        document.querySelectorAll('.vote-player-btn').forEach(b=>{
+          b.disabled=true;
+          if(b.dataset.pid===btn.dataset.pid) b.classList.add('voted');
+        });
+      };
+    });
+  }
+  const left=room.phaseEndEpoch?Math.max(0,(room.phaseEndEpoch-Date.now())/1000):35;
+  startClientTimer(left,$id('t-bar'),$id('t-lbl'));
+}
+
+// ── MODE 5: Word Imposter — Imposter Guess ────────────────────
+function showWiGuess() {
+  const room=G.room;
+  const amImposter=G.wiRole==='imposter';
+  render(`
+    <div class="screen">
+      ${roundBadge()}
+      <div class="role-banner wi-imposter">🎯 ${amImposter?'Last Chance — Guess the Civilian Word!':'Imposter is guessing…'}</div>
+      ${amImposter?`
+      <div class="card card-glow-pink">
+        <h3>You survived! Can you guess what the civilians' word was?</h3>
+        <p>Get it right for <strong style="color:var(--gold)">+75 bonus points!</strong></p>
+        <input id="wi-guess-inp" type="text" class="guess-input" placeholder="Civilian word…" maxlength="40" autocomplete="off" />
+        <button id="btn-wi-guess" class="btn-primary btn-full" disabled>Submit Guess 🎯</button>
+        <div class="timer-bar-wrap" style="margin-top:4px"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
+        <div class="timer-label" id="t-lbl">20s</div>
+      </div>`:`
+      <div class="card text-center">
+        <h3>⏳ The imposter is making their final guess…</h3>
+        <div class="spinner" style="margin:8px auto"></div>
+        <div class="timer-bar-wrap" style="margin-top:8px"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
+        <div class="timer-label" id="t-lbl">20s</div>
+      </div>`}
+      ${scoreboardHTML()}
+    </div>
+  `);
+  if (amImposter&&!G.wiGuessSubmitted) {
+    const inp=$id('wi-guess-inp'), btn=$id('btn-wi-guess');
+    setTimeout(()=>inp?.focus(),50);
+    inp.oninput=()=>{ btn.disabled=!inp.value.trim(); };
+    inp.onkeydown=e=>{ if(e.key==='Enter'&&!btn.disabled) submitWiGuess(); };
+    btn.onclick=submitWiGuess;
+  }
+  const left=room.phaseEndEpoch?Math.max(0,(room.phaseEndEpoch-Date.now())/1000):20;
+  startClientTimer(left,$id('t-bar'),$id('t-lbl'));
+}
+
+function submitWiGuess() {
+  if (G.wiGuessSubmitted) return;
+  const val=$id('wi-guess-inp')?.value.trim();
+  if (!val) return;
+  G.wiGuessSubmitted=true;
+  const btn=$id('btn-wi-guess'); if(btn){btn.disabled=true;btn.textContent='Submitted! ⏳';}
+  G.socket.emit('wi_imposter_guess',{guess:val});
+}
+
 // ── Generic waiting ───────────────────────────────────────────
 function showWaiting(msg,sub) {
   const amHost=G.room?.hostId===G.myId;
@@ -1509,6 +1770,32 @@ async function showRoundResult() {
           ${imposterCaught
             ?`<div class="guess-result-row wrong"><span class="gr-name">🕵️ ${esc(imposterName)}</span><span class="gr-guess">Was caught</span><span class="gr-pts">+0</span></div>`
             :`<div class="guess-result-row correct"><span class="gr-name">🕵️ ${esc(imposterName)}</span><span class="gr-guess">Escaped undetected!</span><span class="gr-pts">+100</span></div>`}
+        </div>
+        ${scoreboardHTML()}
+        ${amHost?`<button id="btn-next" class="btn-primary btn-full">Next Round ➡️</button>`:'<p class="text-center" style="color:var(--text3)">Waiting for host…</p>'}
+      </div>
+    `);
+
+  } else if (room.mode==='word_imposter') {
+    const {winner,civilianWord,imposterWord,assignments,eliminated,imposterGuessedCorrectly}=result;
+    render(`
+      <div class="screen">
+        ${roundBadge()}
+        <div class="card ${winner==='civilian'?'card-glow-green':'card-glow-pink'} text-center">
+          <div style="font-size:2.5rem">${winner==='civilian'?'🎉':'🕵️'}</div>
+          <h2>${winner==='civilian'?'Civilians win!':'Imposter survives!'}</h2>
+          <p>Civilian word: <strong>${esc(civilianWord)}</strong></p>
+          <p>Imposter word: <strong>${esc(imposterWord)}</strong></p>
+          ${imposterGuessedCorrectly?`<p style="color:var(--gold);font-weight:700;margin-top:4px">🎯 Imposter guessed correctly! +75 pts</p>`:''}
+        </div>
+        <div class="card" style="gap:8px">
+          <h3>Roles revealed</h3>
+          ${(assignments||[]).map(a=>`
+            <div class="guess-result-row ${a.role==='imposter'?'wrong':'correct'}">
+              <span class="gr-name">${esc(a.name)}</span>
+              <span class="gr-guess">${a.role==='imposter'?'🕵️ Imposter':a.role==='blank'?'❓ Undercover':'👥 Civilian'}${a.word?' — "'+esc(a.word)+'"':''}</span>
+              <span class="gr-pts"></span>
+            </div>`).join('')}
         </div>
         ${scoreboardHTML()}
         ${amHost?`<button id="btn-next" class="btn-primary btn-full">Next Round ➡️</button>`:'<p class="text-center" style="color:var(--text3)">Waiting for host…</p>'}
@@ -1654,6 +1941,18 @@ function renderPhase() {
       if ($app().querySelector('.telephone-vote-screen') && !(G.telephoneVotedAccurate&&G.telephoneVotedBlunder)) return;
       return showTelephoneVote();
     }
+    case 'wi_reveal':  return showWiReveal();
+    case 'wi_clue': {
+      const isMyTurn=room.wiClueOrder?.[room.wiCurrentClueIdx]===G.myId;
+      if (isMyTurn&&!G.wiClueSubmitted&&$app().querySelector('.wi-clue-screen')) return;
+      return showWiClue();
+    }
+    case 'wi_discuss': return showWiDiscuss();
+    case 'wi_vote': {
+      if ($app().querySelector('.wi-vote-screen')&&!G.wiVoted) return;
+      return showWiVote();
+    }
+    case 'wi_guess':   return showWiGuess();
     case 'round_result':   return showRoundResult();
     case 'final':          return showPodium();
     default:               return showWaiting('Loading…','');
@@ -1718,6 +2017,16 @@ function initSocket(onReady) {
       G._myTelAccuratePid=null; G._myTelBlunderPid=null;
       G.myTelephoneSubmitted=false; G.guessSubmitted=false; G.mimicSubmitted=false;
       G.nameHint=null;
+      G.wiRole=null; G.wiWord=null; G.wiClueSubmitted=false;
+      G.wiVoted=false; G.wiMyVotePid=null; G.wiGuessSubmitted=false;
+      G._wiLastPhase=null;
+    }
+
+    // WI phase transition resets (between cycles)
+    if (G._wiLastPhase!==room.phase) {
+      if (room.phase==='wi_clue') G.wiClueSubmitted=false;
+      if (room.phase==='wi_vote') { G.wiVoted=false; G.wiMyVotePid=null; }
+      G._wiLastPhase=room.phase;
     }
 
     // Recompute roles from speakerOrder
@@ -1805,6 +2114,20 @@ function initSocket(onReady) {
       G.telephoneListenBuf=await G.audio.fromBase64(audioBase64);
       if (G.room?.phase==='telephone_chain') showTelephoneMyTurn(chainIdx,chainLength,null,G.telephoneListenBuf);
     } catch(e) { console.error('telephone_listen decode:',e); }
+  });
+
+  // ── Mode 5 — Word Imposter ───────────────────────────────────
+  s.on('wi_role', ({role,word}) => {
+    G.wiRole=role; G.wiWord=word;
+    if (G.room?.phase==='wi_reveal') showWiReveal();
+  });
+
+  s.on('wi_your_turn', () => {
+    if (G.room?.phase==='wi_clue') showWiClue();
+  });
+
+  s.on('wi_guess_prompt', () => {
+    if (G.room?.phase==='wi_guess') showWiGuess();
   });
 
   // ── Name hint ────────────────────────────────────────────────

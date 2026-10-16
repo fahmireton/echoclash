@@ -419,6 +419,50 @@ input::placeholder { color: var(--text3); }
   border-radius: var(--radius-sm); padding: 10px 16px; margin-top: 4px;
 }
 
+/* ── Word Imposter / Mode 5 ───────────────────────────────────────────────── */
+.role-banner.wi-civilian { background: rgba(0,212,255,.12); border: 1px solid rgba(0,212,255,.35); color: var(--blue); }
+.role-banner.wi-imposter { background: rgba(255,51,51,.14);  border: 1px solid rgba(255,51,51,.4);  color: var(--red); }
+.role-banner.wi-blank    { background: rgba(240,240,255,.06);border: 1px solid var(--border);        color: var(--text3); }
+.role-banner.wi-discuss  { background: rgba(57,255,20,.10);  border: 1px solid rgba(57,255,20,.3);  color: var(--green); }
+
+.mode-card-wide { grid-column: 1 / -1; }
+
+.wi-word-big {
+  font-size: clamp(2rem,9vw,3rem); font-weight: 900; text-align: center;
+  background: linear-gradient(135deg,var(--blue),var(--green));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  padding: 14px 0; letter-spacing: 2px;
+}
+.wi-word-blank {
+  color: var(--text3) !important; -webkit-text-fill-color: var(--text3) !important;
+  background: none !important; letter-spacing: 8px; opacity: .5;
+}
+
+.wi-clues-list { display: flex; flex-direction: column; gap: 8px; }
+.wi-clue-row {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 10px 14px;
+}
+.wi-clue-name { font-weight: 700; min-width: 76px; font-size: .84rem; color: var(--text2); flex-shrink: 0; }
+.wi-clue-text { font-size: 1rem; font-weight: 800; flex: 1; }
+
+.wi-elim-row {
+  padding: 8px 12px; border-radius: var(--radius-sm);
+  background: rgba(255,51,51,.08); border: 1px solid rgba(255,51,51,.2);
+  color: var(--red); font-size: .88rem; font-weight: 600;
+}
+
+.wi-settings { border-color: rgba(191,0,255,.3); box-shadow: 0 0 18px rgba(191,0,255,.08), var(--shadow); }
+.wi-count-btns { display: flex; gap: 8px; }
+.wi-count-btn {
+  flex: 1; background: var(--surface); border: 2px solid var(--border);
+  color: var(--text); padding: 12px; border-radius: var(--radius-sm);
+  font-size: 1.1rem; font-weight: 900; transition: all .2s;
+}
+.wi-count-btn.active { border-color: var(--blue); background: rgba(0,212,255,.12); color: var(--blue); }
+.wi-count-btn:hover:not(.active) { border-color: rgba(0,212,255,.4); }
+
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 380px) {
   h1 { font-size: 1.8rem; }
