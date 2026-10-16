@@ -23,8 +23,8 @@ app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.h
 // ── Helpers ────────────────────────────────────────────────────────────────
 const GRACE_MS   = 5 * 60 * 1000; // 5-minute disconnect grace
 const GUESS_SECS = 45;
-const NOISE_RECORD_SECS = 10;   // hold-to-record max for creator
-const NOISE_MIMIC_SECS  = 10;   // hold-to-record max for mimics
+const NOISE_RECORD_SECS = 5;    // hold-to-record max for creator
+const NOISE_MIMIC_SECS  = 5;    // hold-to-record max for mimics
 const MIMIC_SUBMIT_SECS = 35;   // window for all mimics to come in
 
 function randCode() {
@@ -239,12 +239,11 @@ function finalizeMimics(room) {
     scored.push({ pid, score, name: player?.name ?? '?' });
   }
 
-  // Sort by score desc → award points
+  // Sort by score desc — accuracy score IS the points earned
   scored.sort((a, b) => b.score - a.score);
-  const pts = [100, 60, 30];
-  scored.forEach((s, i) => {
+  scored.forEach(s => {
     const p = room.players.get(s.pid);
-    if (p) p.score += pts[i] ?? 0;
+    if (p) p.score += s.score;
   });
 
   room.roundResult = {
@@ -256,7 +255,7 @@ function finalizeMimics(room) {
       name: s.name,
       score: s.score,
       commentary: room.mimics.get(s.pid)?.commentary ?? '',
-      points: pts[i] ?? 0,
+      points: s.score,
     })),
     scores: [...room.players.values()].map(p => ({ id:p.id, name:p.name, score:p.score })),
   };

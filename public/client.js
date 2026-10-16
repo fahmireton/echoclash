@@ -821,7 +821,7 @@ function showNoiseCreatorRecord() {
     </div>
   `);
 
-  setupRecBtn('btn-noise-rec','noise-tmr',10, buf => {
+  setupRecBtn('btn-noise-rec','noise-tmr',5, buf => {
     if (!buf) return;
     G.creatorBuf = buf;
     $id('noise-prev').classList.remove('hidden');
@@ -894,7 +894,7 @@ function showNoiseMimicTurn(targetBuf) {
       </div>
       <div class="card">
         <div class="timer-bar-wrap"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
-        <div class="timer-label" id="t-lbl">35s</div>
+        <div class="timer-label" id="t-lbl">30s</div>
         <div id="mimic-feed" class="live-feed" style="margin-top:8px"></div>
       </div>
       ${scoreboardHTML()}
@@ -903,7 +903,7 @@ function showNoiseMimicTurn(targetBuf) {
 
   $id('target-player').appendChild(audioPlayerWidget(targetBuf,'Target Sound'));
 
-  setupRecBtn('btn-mm','mm-tmr',10, buf => {
+  setupRecBtn('btn-mm','mm-tmr',5, buf => {
     if (!buf) return;
     G.myMimicBuf = buf;
     $id('mm-prev').classList.remove('hidden');
@@ -1047,8 +1047,8 @@ async function showRoundResult() {
         <div class="mimic-header">
           <span class="mimic-rank">${RANK_ICONS[r.rank-1] || `#${r.rank}`}</span>
           <span class="mimic-name">${esc(r.name)}</span>
-          <span class="mimic-pct" style="color:${r.score>=75?'var(--green)':r.score>=50?'var(--orange)':'var(--red)'}">${r.score}%</span>
-          <span class="mimic-pts">+${r.points}</span>
+          <span class="mimic-pct" style="color:${r.score>=75?'var(--green)':r.score>=50?'var(--orange)':'var(--red)'}">${r.score}% accuracy</span>
+          <span class="mimic-pts">+${r.points} pts</span>
         </div>
         <div class="mimic-comment">${esc(r.commentary)}</div>
       `;
@@ -1159,15 +1159,23 @@ function renderPhase() {
     case 'speaker_cat':     return G.isSpeaker ? showSpeakerCatSelect()  : showWaiting('Speaker is choosing a category…','Get ready to guess!');
     case 'speaker_celeb':   return G.isSpeaker ? showSpeakerCelebSelect(G.celebOptions) : showWaiting('Speaker is choosing a celebrity…','');
     case 'speaker_record':  return G.isSpeaker ? showSpeakerRecord(room._celeb||'')     : showWaiting('Speaker is recording…','You’ll hear reversed audio soon!');
-    case 'guessing':
+    case ‘guessing’:
       if (G.isSpeaker) return showSpeakerWaiting();
-      if (G.speakerBuf) return showGuesserTurn(G.speakerBuf);
-      return showWaiting('Loading reversed audio…','');
-    case 'noise_record':    return G.isCreator ? showNoiseCreatorRecord() : showWaiting('Noise creator is recording a sound…','Listen carefully — you’ll need to mimic it!');
-    case 'noise_mimic':
+      if (G.speakerBuf) {
+        // Don’t reset UI if guesser is already active on this screen
+        if ($app().querySelector(‘.role-banner.guesser’) && !G.guessSubmitted) return;
+        return showGuesserTurn(G.speakerBuf);
+      }
+      return showWaiting(‘Loading reversed audio…’,’’);
+    case ‘noise_record’:    return G.isCreator ? showNoiseCreatorRecord() : showWaiting(‘Noise creator is recording a sound…’,’Listen carefully — you\’ll need to mimic it!’);
+    case ‘noise_mimic’:
       if (G.isCreator) return showCreatorWaiting();
-      if (G.creatorBuf) return showNoiseMimicTurn(G.creatorBuf);
-      return showWaiting('Loading target sound…','');
+      if (G.creatorBuf) {
+        // Don’t reset UI if mimic player is already active on this screen
+        if ($app().querySelector(‘.role-banner.mimic’) && !G.mimicSubmitted) return;
+        return showNoiseMimicTurn(G.creatorBuf);
+      }
+      return showWaiting(‘Loading target sound…’,’’);
     case 'noise_scoring':   return showScoring();
     case 'round_result':    return showRoundResult();
     case 'final':           return showPodium();
@@ -1250,7 +1258,7 @@ function initSocket(onReady) {
     showLanding();
   });
 
-  s.on('room_snapshot', room => {
+  s.on('room_snapshot', async room => {
     const prevPhase = G.room?.phase;
     G.room = room;
 
@@ -1273,6 +1281,15 @@ function initSocket(onReady) {
       G.creatorBuf = null;
       G.guessSubmitted = false;
       G.mimicSubmitted = false;
+    }
+
+    // Decode audio from snapshot data as a reliable fallback
+    // (the dedicated audio events may race with snapshots)
+    if (room.phase === 'noise_mimic' && !G.isCreator && room.creatorAudio && !G.creatorBuf && G.audio) {
+      try { G.creatorBuf = await G.audio.fromBase64(room.creatorAudio); } catch(e) { console.error('snapshot creatorAudio decode:', e); }
+    }
+    if (room.phase === 'guessing' && !G.isSpeaker && room.speakerAudio && !G.speakerBuf && G.audio) {
+      try { G.speakerBuf = await G.audio.fromBase64(room.speakerAudio); } catch(e) { console.error('snapshot speakerAudio decode:', e); }
     }
 
     renderPhase();
