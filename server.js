@@ -512,7 +512,8 @@ io.on('connection', socket => {
 
     room.mimics.set(socket.playerId, { audio: audioBase64, score: 0, commentary: '' });
     io.to(room.code).emit('mimic_in', { playerId: socket.playerId,
-      name: room.players.get(socket.playerId)?.name ?? '?' });
+      name: room.players.get(socket.playerId)?.name ?? '?',
+      audioBase64 });
 
     // All mimics in?
     const expected = room.speakerOrder.length - 1;
@@ -549,6 +550,37 @@ io.on('connection', socket => {
     room.usedCelebs   = [];
     room.phase        = 'lobby';
     clearPhaseTimer(room);
+    broadcastRoom(room);
+  });
+
+  // ── Kick / Leave ───────────────────────────────────────────────────────────
+  socket.on('kick_player', ({ targetId }) => {
+    const room = roomOf(socket);
+    if (!room || room.hostId !== socket.playerId) return;
+    if (targetId === room.hostId) return; // can't kick host
+    const target = room.players.get(targetId);
+    if (!target) return;
+    if (target.disconnectTimer) { clearTimeout(target.disconnectTimer); target.disconnectTimer = null; }
+    room.players.delete(targetId);
+    if (target.connected) io.to(target.socketId).emit('kicked', { msg: 'You were removed by the host.' });
+    if (room.players.size === 0) { rooms.delete(room.code); return; }
+    broadcastRoom(room);
+  });
+
+  socket.on('leave_room', () => {
+    const room = roomOf(socket);
+    if (!room) return;
+    const player = room.players.get(socket.playerId);
+    if (!player) return;
+    if (player.disconnectTimer) { clearTimeout(player.disconnectTimer); player.disconnectTimer = null; }
+    room.players.delete(socket.playerId);
+    socket.leave(room.code);
+    socket.roomCode = null;
+    if (room.players.size === 0) { rooms.delete(room.code); return; }
+    if (room.hostId === socket.playerId) {
+      const next = room.players.values().next().value;
+      if (next) { next.isHost = true; room.hostId = next.id; }
+    }
     broadcastRoom(room);
   });
 

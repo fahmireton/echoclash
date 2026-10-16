@@ -156,6 +156,8 @@ input::placeholder { color: var(--text3); }
 .player-ready { font-size: .8rem; color: var(--text3); }
 .player-ready.is-ready { color: var(--green); }
 .player-host-badge { font-size: .72rem; background: rgba(0,212,255,.15); border: 1px solid rgba(0,212,255,.3); color: var(--blue); padding: 2px 7px; border-radius: 20px; }
+.btn-kick { background: transparent; border: 1px solid rgba(255,0,110,.3); color: rgba(255,0,110,.7); border-radius: 6px; padding: 3px 7px; font-size: .8rem; cursor: pointer; flex-shrink: 0; transition: background .15s, color .15s; }
+.btn-kick:hover { background: rgba(255,0,110,.15); color: #ff006e; border-color: #ff006e; }
 
 /* ── Room code display ────────────────────────────────────────────────────── */
 .room-code-big {

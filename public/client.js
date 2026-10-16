@@ -462,9 +462,13 @@ function showLobby() {
               ${avatarHTML(p.name, i)}
               <span class="player-name">${esc(p.name)} ${p.isHost ? '<span class="player-host-badge">Host</span>' : ''}</span>
               <span class="player-ready ${p.ready || p.isHost ? 'is-ready' : ''}">${p.isHost ? '👑' : p.ready ? '✅' : '⏳'}</span>
+              ${amHost && !p.isHost ? `<button class="btn-kick" data-id="${esc(p.id)}" data-name="${esc(p.name)}" title="Kick player">🚫</button>` : ''}
             </div>`).join('')}
         </div>
-        ${!amHost ? `<button id="btn-ready" class="btn-${me?.ready ? 'ghost' : 'green'} btn-full">${me?.ready ? '✅ Ready (click to unready)' : 'Mark as Ready ✅'}</button>` : ''}
+        ${!amHost ? `
+          <button id="btn-ready" class="btn-${me?.ready ? 'ghost' : 'green'} btn-full">${me?.ready ? '✅ Ready (click to unready)' : 'Mark as Ready ✅'}</button>
+          <button id="btn-leave" class="btn-ghost btn-full" style="margin-top:6px;color:var(--red)">Leave Room 🚪</button>
+        ` : ''}
       </div>
 
       ${amHost ? `
@@ -488,6 +492,7 @@ function showLobby() {
           Start Game ▶
         </button>
         ${room.players.length < 2 ? '<small style="text-align:center;color:var(--text3)">Waiting for at least 1 more player…</small>' : ''}
+        <button id="btn-host-leave" class="btn-ghost btn-full" style="margin-top:6px;color:var(--red);font-size:.85rem">Leave Room 🚪</button>
       </div>` : `
       <div class="card text-center">
         <p>Waiting for the host to start…</p>
@@ -506,6 +511,14 @@ function showLobby() {
       const ready = !(me?.ready);
       G.socket.emit('set_ready', { ready });
     };
+    $id('btn-leave').onclick = () => {
+      if (confirm('Leave the room?')) {
+        G.socket.emit('leave_room');
+        SESSION.clear();
+        G.room = null;
+        showLanding();
+      }
+    };
   } else {
     $id('mode-rev').onclick   = () => G.socket.emit('host_set_mode', { mode:'reverse' });
     $id('mode-noise').onclick = () => G.socket.emit('host_set_mode', { mode:'noise' });
@@ -514,6 +527,21 @@ function showLobby() {
       if (v >= 2 && v <= 20) G.socket.emit('host_set_rounds', { count: v });
     };
     $id('btn-start').onclick = () => G.socket.emit('host_start');
+    $id('btn-host-leave').onclick = () => {
+      if (confirm('Leave the room? Another player will become host.')) {
+        G.socket.emit('leave_room');
+        SESSION.clear();
+        G.room = null;
+        showLanding();
+      }
+    };
+    document.querySelectorAll('.btn-kick').forEach(b => {
+      b.onclick = () => {
+        if (confirm(`Kick ${b.dataset.name} from the room?`)) {
+          G.socket.emit('kick_player', { targetId: b.dataset.id });
+        }
+      };
+    });
   }
 
   // Pre-fill room code from URL
@@ -910,6 +938,32 @@ function showNoiseMimicTurn(targetBuf) {
   startClientTimer(left, $id('t-bar'), $id('t-lbl'));
 }
 
+// ── CREATOR: Waiting while others mimic ───────────────────────────────────
+function showCreatorWaiting() {
+  const amHost = G.room?.hostId === G.myId;
+  render(`
+    <div class="screen">
+      ${roundBadge()}
+      <div class="role-banner creator">🔊 Your sound is out there!</div>
+      <div class="card card-glow-green text-center">
+        <h2>Players are mimicking…</h2>
+        <p>Listen to each mimic as they come in!</p>
+        <div class="spinner" style="margin:12px auto"></div>
+      </div>
+      <div class="card">
+        <h3>Mimics received:</h3>
+        <div id="mimic-feed" class="live-feed" style="gap:10px;display:flex;flex-direction:column"></div>
+      </div>
+      ${scoreboardHTML()}
+      ${amHost ? `<button id="btn-force-lobby" class="btn-ghost btn-full" style="margin-top:8px;font-size:.82rem;color:var(--text3)">↩ Abort & Return to Lobby</button>` : ''}
+    </div>
+  `);
+  if (amHost) {
+    const b = $id('btn-force-lobby');
+    if (b) b.onclick = () => { if (confirm('Abort this round and return everyone to the lobby?')) G.socket.emit('force_lobby'); };
+  }
+}
+
 // ── Waiting generic ───────────────────────────────────────────────────────
 function showWaiting(msg, sub) {
   const amHost = G.room?.hostId === G.myId;
@@ -1109,7 +1163,7 @@ function renderPhase() {
       return showWaiting('Loading reversed audio…','');
     case 'noise_record':    return G.isCreator ? showNoiseCreatorRecord() : showWaiting('Noise creator is recording a sound…','Listen carefully — you’ll need to mimic it!');
     case 'noise_mimic':
-      if (G.isCreator) return showWaiting('Players are mimicking your sound…','Let\'s see who nails it!');
+      if (G.isCreator) return showCreatorWaiting();
       if (G.creatorBuf) return showNoiseMimicTurn(G.creatorBuf);
       return showWaiting('Loading target sound…','');
     case 'noise_scoring':   return showScoring();
@@ -1171,6 +1225,19 @@ function initSocket(onReady) {
     const spId = room.speakerOrder?.[room.speakerIdx];
     G.isSpeaker = (spId === playerId) && ['speaker_cat','speaker_celeb','speaker_record','guessing'].includes(room.phase);
     G.isCreator = (spId === playerId) && ['noise_record','noise_mimic'].includes(room.phase);
+
+    // Host refresh prompt — give host a chance to leave instead of auto-rejoining
+    if (room.hostId === playerId && room.phase === 'lobby') {
+      const stay = confirm('You refreshed as the room host.\n\nStay as host → OK\nLeave room → Cancel');
+      if (!stay) {
+        G.socket.emit('leave_room');
+        SESSION.clear();
+        G.room = null;
+        showLanding();
+        return;
+      }
+    }
+
     toast('Rejoined! ✅','success');
     renderPhase();
   });
@@ -1247,14 +1314,31 @@ function initSocket(onReady) {
     if (correct) toast(`${name} got it!`, 'success');
   });
 
-  s.on('mimic_in', ({ name }) => {
+  s.on('mimic_in', async ({ name, audioBase64 }) => {
     const feed = $id('mimic-feed');
     if (feed) {
       const d = document.createElement('div');
       d.className = 'feed-item info';
-      d.textContent = `${name} submitted their mimic ✓`;
+      d.style.flexDirection = 'column';
+      d.style.alignItems = 'flex-start';
+      d.style.gap = '6px';
+      d.innerHTML = `<span>${esc(name)} submitted their mimic ✓</span>`;
+      if (audioBase64 && G.audio) {
+        try {
+          const buf = await G.audio.fromBase64(audioBase64);
+          d.appendChild(audioPlayerWidget(buf, `${name}'s mimic`));
+        } catch(e) { console.error('mimic_in decode:', e); }
+      }
       feed.appendChild(d);
     }
+  });
+
+  // ── Kick / Leave events ──────────────────────────────────────
+  s.on('kicked', ({ msg }) => {
+    SESSION.clear();
+    G.room = null;
+    toast(msg || 'You were kicked from the room.', 'error');
+    showLanding();
   });
 
   // ── Player events ────────────────────────────────────────────
