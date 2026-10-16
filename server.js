@@ -477,13 +477,20 @@ io.on('connection', socket => {
   });
 
   // ── Mode 2 — Noise Mimic ───────────────────────────────────────────────
-  socket.on('creator_audio', ({ audioBase64 }) => {
+  socket.on('creator_audio', ({ audioBase64 }, ack) => {
     const room = roomOf(socket);
-    if (!room || room.phase !== 'noise_record') return;
-    if (room.speakerOrder[room.speakerIdx] !== socket.playerId) return;
+    if (!room || room.phase !== 'noise_record') {
+      if (typeof ack === 'function') ack({ err: 'Wrong phase' });
+      return;
+    }
+    if (room.speakerOrder[room.speakerIdx] !== socket.playerId) {
+      if (typeof ack === 'function') ack({ err: 'Not your turn' });
+      return;
+    }
 
     room.creatorAudio = audioBase64;
     room.phase        = 'noise_mimic';
+    if (typeof ack === 'function') ack({ ok: true });
     broadcastRoom(room);
 
     // Send to all non-creators
@@ -542,6 +549,22 @@ io.on('connection', socket => {
     room.usedCelebs   = [];
     room.phase        = 'lobby';
     clearPhaseTimer(room);
+    broadcastRoom(room);
+  });
+
+  // Force any player back to lobby view (host only, any phase)
+  socket.on('force_lobby', () => {
+    const room = roomOf(socket);
+    if (!room || room.hostId !== socket.playerId) return;
+    clearPhaseTimer(room);
+    for (const p of room.players.values()) { p.score = 0; p.ready = false; }
+    room.currentRound = 0;
+    room.usedCelebs   = [];
+    room.phase        = 'lobby';
+    room.speakerAudio = null;
+    room.creatorAudio = null;
+    room.selectedCeleb = null;
+    room.roundResult  = null;
     broadcastRoom(room);
   });
 

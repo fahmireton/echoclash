@@ -96,14 +96,20 @@ class AudioManager {
     return buf;
   }
 
-  play(buf, onended) {
-    if (this.ctx.state === 'suspended') this.ctx.resume();
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    src.connect(this.ctx.destination);
-    if (onended) src.onended = onended;
-    src.start();
-    return src;
+  async play(buf, onended) {
+    try {
+      if (this.ctx.state !== 'running') await this.ctx.resume();
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(this.ctx.destination);
+      if (onended) src.onended = onended;
+      src.start();
+      return src;
+    } catch(e) {
+      console.error('play() failed:', e);
+      toast('Could not play audio — tap the screen first and try again', 'error');
+      return null;
+    }
   }
 
   toBase64(buf) {
@@ -265,10 +271,13 @@ function audioPlayerWidget(audioBuf, label) {
   ctx.stroke();
 
   let src = null;
-  playBtn.onclick = () => {
+  playBtn.onclick = async () => {
     if (src) { try { src.stop(); } catch(e){} src = null; playBtn.textContent = '▶'; return; }
-    src = G.audio.play(audioBuf, () => { src = null; playBtn.textContent = '▶'; });
     playBtn.textContent = '⏹';
+    playBtn.disabled = true;
+    src = await G.audio.play(audioBuf, () => { src = null; playBtn.textContent = '▶'; playBtn.disabled = false; });
+    playBtn.disabled = false;
+    if (!src) playBtn.textContent = '▶'; // play failed
   };
 
   return wrap;
@@ -411,6 +420,16 @@ function showLanding() {
 
   $id('btn-create').onclick = () => doCreate($id('c-name').value.trim());
   $id('btn-join').onclick   = () => doJoin($id('j-name').value.trim(), $id('j-code').value.trim().toUpperCase());
+
+  // Clear stale session if they manually navigated back to landing
+  if (SESSION.id) {
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'btn-ghost btn-sm';
+    clearBtn.style.cssText = 'margin-top:4px;font-size:.78rem;color:var(--text3);';
+    clearBtn.textContent = '✕ Clear saved session & start fresh';
+    clearBtn.onclick = () => { SESSION.clear(); G.socket?.disconnect(); G.socket = null; G.audio = null; showLanding(); };
+    $app().appendChild(clearBtn);
+  }
   $id('j-code').addEventListener('input', e => { e.target.value = e.target.value.toUpperCase(); });
   $id('c-name').addEventListener('keydown', e => { if (e.key === 'Enter') doCreate($id('c-name').value.trim()); });
   $id('j-code').addEventListener('keydown', e => { if (e.key === 'Enter') doJoin($id('j-name').value.trim(), $id('j-code').value.trim().toUpperCase()); });
@@ -789,15 +808,27 @@ function showNoiseCreatorRecord() {
 }
 
 async function sendCreatorAudio() {
-  if (!G.creatorBuf) return;
+  if (!G.creatorBuf) { toast('No recording found — record first!', 'error'); return; }
   const btn = $id('btn-send-noise');
-  if (btn) { btn.disabled=true; btn.textContent='Sending…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending… ⏳'; }
   try {
     const b64 = G.audio.toBase64(G.creatorBuf);
-    G.socket.emit('creator_audio', { audioBase64: b64 });
+    G.socket.emit('creator_audio', { audioBase64: b64 }, (ack) => {
+      if (ack?.ok) {
+        toast('Sound sent to everyone! 📡', 'success');
+      } else if (ack?.err) {
+        toast('Server rejected audio: ' + ack.err, 'error');
+        if (btn) { btn.disabled = false; btn.textContent = 'Send to Players 📡'; }
+      }
+    });
+    // Fallback if server doesn't ack within 5s
+    setTimeout(() => {
+      if (btn && btn.disabled) { btn.disabled = false; btn.textContent = 'Sent ✓'; }
+    }, 5000);
   } catch(e) {
-    toast('Failed to send audio','error');
-    if (btn) { btn.disabled=false; btn.textContent='Send to Players 📡'; }
+    console.error('sendCreatorAudio:', e);
+    toast('Failed to encode audio — try a shorter recording', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Send to Players 📡'; }
   }
 }
 
@@ -881,6 +912,7 @@ function showNoiseMimicTurn(targetBuf) {
 
 // ── Waiting generic ───────────────────────────────────────────────────────
 function showWaiting(msg, sub) {
+  const amHost = G.room?.hostId === G.myId;
   render(`
     <div class="screen">
       ${roundBadge()}
@@ -891,8 +923,13 @@ function showWaiting(msg, sub) {
         <div class="spinner"></div>
       </div>
       ${scoreboardHTML()}
+      ${amHost ? `<button id="btn-force-lobby" class="btn-ghost btn-full" style="margin-top:8px;font-size:.82rem;color:var(--text3)">↩ Abort & Return to Lobby</button>` : ''}
     </div>
   `);
+  if (amHost) {
+    const b = $id('btn-force-lobby');
+    if (b) b.onclick = () => { if (confirm('Abort this round and return everyone to the lobby?')) G.socket.emit('force_lobby'); };
+  }
 }
 
 // ── Round result ──────────────────────────────────────────────────────────
@@ -1130,6 +1167,10 @@ function initSocket(onReady) {
     G.myId = playerId;
     G.room = room;
     G.myName = room.players.find(p=>p.id===playerId)?.name || SESSION.name || '';
+    // Restore role flags from room state
+    const spId = room.speakerOrder?.[room.speakerIdx];
+    G.isSpeaker = (spId === playerId) && ['speaker_cat','speaker_celeb','speaker_record','guessing'].includes(room.phase);
+    G.isCreator = (spId === playerId) && ['noise_record','noise_mimic'].includes(room.phase);
     toast('Rejoined! ✅','success');
     renderPhase();
   });
@@ -1176,17 +1217,25 @@ function initSocket(onReady) {
   s.on('reversed_audio', async ({ audioBase64 }) => {
     if (G.isSpeaker) return;
     try {
+      toast('Reversed audio incoming… 🔀', 'info');
       G.speakerBuf = await G.audio.fromBase64(audioBase64);
-      if (G.room?.phase === 'guessing') showGuesserTurn(G.speakerBuf);
-    } catch(e) { toast('Audio error — refresh if needed','error'); }
+      showGuesserTurn(G.speakerBuf);
+    } catch(e) {
+      console.error('reversed_audio decode failed:', e);
+      toast('Failed to load reversed audio — ask speaker to re-record', 'error');
+    }
   });
 
   s.on('creator_audio', async ({ audioBase64 }) => {
     if (G.isCreator) return;
     try {
+      toast('Target sound received — loading…', 'info');
       G.creatorBuf = await G.audio.fromBase64(audioBase64);
-      if (G.room?.phase === 'noise_mimic') showNoiseMimicTurn(G.creatorBuf);
-    } catch(e) { toast('Audio error','error'); }
+      showNoiseMimicTurn(G.creatorBuf);
+    } catch(e) {
+      console.error('creator_audio decode failed:', e);
+      toast('Failed to load the sound — ask creator to re-send', 'error');
+    }
   });
 
   // ── Live guess feed ──────────────────────────────────────────
@@ -1266,8 +1315,14 @@ async function ensureAudio() {
   try {
     G.audio = new AudioManager();
     await G.audio.init();
+    // Unlock AudioContext on any user gesture (critical for iOS Safari)
+    const unlock = () => {
+      if (G.audio?.ctx?.state === 'suspended') G.audio.ctx.resume().catch(() => {});
+    };
+    document.addEventListener('touchstart', unlock, { passive: true });
+    document.addEventListener('click',      unlock, { passive: true });
   } catch(e) {
-    toast('Microphone access required! Please allow it.','error');
+    toast('Microphone access required! Please allow it and try again.','error');
     throw e;
   }
 }
