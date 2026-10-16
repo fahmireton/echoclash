@@ -1065,12 +1065,12 @@ function renderPhase() {
     case 'lobby':           return showLobby();
     case 'speaker_cat':     return G.isSpeaker ? showSpeakerCatSelect()  : showWaiting('Speaker is choosing a category…','Get ready to guess!');
     case 'speaker_celeb':   return G.isSpeaker ? showSpeakerCelebSelect(G.celebOptions) : showWaiting('Speaker is choosing a celebrity…','');
-    case 'speaker_record':  return G.isSpeaker ? showSpeakerRecord(room._celeb||'')     : showWaiting('Speaker is recording…','You'll hear reversed audio soon!');
+    case 'speaker_record':  return G.isSpeaker ? showSpeakerRecord(room._celeb||'')     : showWaiting('Speaker is recording…','You’ll hear reversed audio soon!');
     case 'guessing':
       if (G.isSpeaker) return showSpeakerWaiting();
       if (G.speakerBuf) return showGuesserTurn(G.speakerBuf);
       return showWaiting('Loading reversed audio…','');
-    case 'noise_record':    return G.isCreator ? showNoiseCreatorRecord() : showWaiting('Noise creator is recording a sound…','Listen carefully — you'll need to mimic it!');
+    case 'noise_record':    return G.isCreator ? showNoiseCreatorRecord() : showWaiting('Noise creator is recording a sound…','Listen carefully — you’ll need to mimic it!');
     case 'noise_mimic':
       if (G.isCreator) return showWaiting('Players are mimicking your sound…','Let\'s see who nails it!');
       if (G.creatorBuf) return showNoiseMimicTurn(G.creatorBuf);
