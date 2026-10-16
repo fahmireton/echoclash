@@ -876,7 +876,7 @@ function submitGuess() {
   if (G.guessSubmitted) return;
   const val = $id('inp-guess')?.value.trim();
   if (!val) return;
-  G.guessSubmitted = true; stopClientTimer();
+  G.guessSubmitted = true;
   const sub=$id('btn-submit-guess'); if(sub){sub.disabled=true;sub.textContent='Submitted! ⏳';}
   G.socket.emit('submit_guess', { guess: val });
 }
@@ -1616,7 +1616,7 @@ function renderPhase() {
     case 'guessing':
       if (G.isSpeaker) return showSpeakerWaiting();
       if (G.speakerBuf) {
-        if ($app().querySelector('.role-banner.guesser') && !G.guessSubmitted) return;
+        if ($app().querySelector('.role-banner.guesser')) return;
         return showGuesserTurn(G.speakerBuf);
       }
       return showWaiting('Loading reversed audio…','');
