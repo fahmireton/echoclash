@@ -252,6 +252,7 @@ function broadcastRoom(room) {
 
 function startRound(room) {
   room.currentRound++;
+  room.phaseEndEpoch = null; // clear stale epoch so clients don't init timers from old value
   room.guesses.clear(); room.mimics.clear(); room.votes.clear();
   room.speakerAudio = null; room.creatorAudio = null;
   room.selectedCeleb = null; room.selectedCat = null; room.roundResult = null;
@@ -309,10 +310,10 @@ function startRound(room) {
 function endGuessing(room) {
   clearPhaseTimer(room);
   const anyCorrect = [...room.guesses.values()].some(g => g.correct);
-  if (!anyCorrect) {
-    const sp = room.players.get(room.speakerOrder[room.speakerIdx]);
-    if (sp) sp.score += 80;
-  }
+  // Speaker earns 50 pts when their recording was clear enough for someone to guess
+  const sp = room.players.get(room.speakerOrder[room.speakerIdx]);
+  let speakerBonus = 0;
+  if (anyCorrect && sp) { speakerBonus = 50; sp.score += speakerBonus; }
   const entries = [...room.guesses.entries()].map(([pid, g]) => ({
     playerId: pid, name: room.players.get(pid)?.name ?? '?',
     guess: g.guess, correct: g.correct, points: g.points,
@@ -321,7 +322,7 @@ function endGuessing(room) {
     celebrity: room.selectedCeleb,
     speakerId: room.speakerOrder[room.speakerIdx],
     speakerName: room.players.get(room.speakerOrder[room.speakerIdx])?.name ?? '',
-    stumped: !anyCorrect, guesses: entries,
+    stumped: !anyCorrect, speakerBonus, guesses: entries,
     scores: [...room.players.values()].map(p => ({ id:p.id, name:p.name, score:p.score })),
   };
   room.phase = 'round_result';
@@ -752,12 +753,12 @@ io.on('connection', socket => {
     if (room.speakerOrder[room.speakerIdx] !== socket.playerId) return;
     room.speakerAudio = audioBase64;
     room.phase = 'guessing';
+    setPhaseTimer(room, GUESS_SECS * 1000, () => endGuessing(room)); // set BEFORE broadcast so phaseEndEpoch is correct in snapshot
     broadcastRoom(room);
     const spId = socket.playerId;
     for (const p of room.players.values()) {
       if (p.id !== spId && p.connected) io.to(p.socketId).emit('reversed_audio', { audioBase64 });
     }
-    setPhaseTimer(room, GUESS_SECS * 1000, () => endGuessing(room));
     // Progressive letter hint every second once timer < 30s
     room.hintInterval = setInterval(() => {
       if (room.phase !== 'guessing') { clearInterval(room.hintInterval); room.hintInterval = null; return; }
@@ -774,11 +775,14 @@ io.on('connection', socket => {
     const player = room.players.get(socket.playerId);
     if (!player) return;
     const correct = fuzzyMatch(guess, room.selectedCeleb);
-    const firstCorrect = correct && ![...room.guesses.values()].some(g => g.correct);
-    const points = correct ? (firstCorrect ? 100 : 60) : 0;
-    if (points) player.score += points;
+    let points = 0;
+    if (correct) {
+      const elapsed = GUESS_SECS - Math.max(0, (room.phaseEndEpoch - Date.now()) / 1000);
+      points = Math.max(10, Math.round(100 * (1 - elapsed / GUESS_SECS)));
+      player.score += points;
+    }
     room.guesses.set(socket.playerId, { guess, correct, points, time: Date.now() });
-    io.to(room.code).emit('guess_in', { playerId: socket.playerId, name: player.name, correct, firstCorrect, points });
+    io.to(room.code).emit('guess_in', { playerId: socket.playerId, name: player.name, correct, points });
     if (room.guesses.size >= room.speakerOrder.length - 1) endGuessing(room);
   });
 

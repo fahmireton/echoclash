@@ -1668,12 +1668,17 @@ function showWaiting(msg,sub) {
         <div class="spinner"></div>
       </div>
       ${scoreboardHTML()}
-      ${amHost?`<button id="btn-force-lobby" class="btn-ghost btn-full" style="margin-top:8px;font-size:.82rem;color:var(--text3)">↩ Abort &amp; Return to Lobby</button>`:''}
+      ${amHost
+        ?`<button id="btn-force-lobby" class="btn-ghost btn-full" style="margin-top:8px;font-size:.82rem;color:var(--text3)">↩ Abort &amp; Return to Lobby</button>`
+        :`<button id="btn-leave-game" class="btn-ghost btn-full" style="margin-top:8px;font-size:.82rem;opacity:0.5">✕ Leave Game</button>`}
     </div>
   `);
   if (amHost) {
     const b=$id('btn-force-lobby');
     if(b) b.onclick=()=>{ if(confirm('Abort and return everyone to lobby?')) G.socket.emit('force_lobby'); };
+  } else {
+    const b=$id('btn-leave-game');
+    if(b) b.onclick=()=>{ if(confirm('Leave the game?')) { G.socket.emit('leave_room'); SESSION.clear(); G.room=null; showLanding(); } };
   }
 }
 
@@ -1684,15 +1689,18 @@ async function showRoundResult() {
   const amHost=room.hostId===G.myId;
 
   if (room.mode==='reverse') {
-    const {celebrity,speakerName,stumped,guesses}=result;
+    const {celebrity,speakerName,stumped,guesses,speakerBonus}=result;
     render(`
       <div class="screen">
         ${roundBadge()}
         <div class="card ${stumped?'card-glow-pink':'card-glow-green'} text-center">
-          <div style="font-size:2.5rem">${stumped?'😈':'🎉'}</div>
-          <h2>${stumped?`${esc(speakerName)} stumped everyone!`:'Correct guesses!'}</h2>
+          <div style="font-size:2.5rem">${stumped?'😬':'🎉'}</div>
+          <h2>${stumped?'Nobody got it!':'Correct!'}</h2>
           <p>The celebrity was:</p>
           <div class="celeb-big">${esc(celebrity)}</div>
+        </div>
+        <div class="card" id="audio-replay-wrap">
+          <h3>🎧 Replay reversed audio</h3>
         </div>
         <div class="card">
           <h3>Guesses</h3>
@@ -1702,12 +1710,14 @@ async function showRoundResult() {
               <span class="gr-guess">${esc(g.guess)}</span>
               <span class="gr-pts">${g.points>0?'+'+g.points:'—'}</span>
             </div>`).join(''):'<p style="color:var(--text3)">Nobody guessed in time.</p>'}
-          ${stumped?`<div class="guess-result-row correct"><span class="gr-name">🎙️ ${esc(speakerName)}</span><span class="gr-guess">Stumped the room!</span><span class="gr-pts">+80</span></div>`:''}
+          ${!stumped&&speakerBonus?`<div class="guess-result-row correct"><span class="gr-name">🎙️ ${esc(speakerName)}</span><span class="gr-guess">Great recording!</span><span class="gr-pts">+${speakerBonus}</span></div>`:''}
         </div>
         ${scoreboardHTML()}
         ${amHost?`<button id="btn-next" class="btn-primary btn-full">Next Round ➡️</button>`:'<p class="text-center" style="color:var(--text3)">Waiting for host…</p>'}
       </div>
     `);
+    const wrap=$id('audio-replay-wrap');
+    if (wrap&&G.speakerBuf) wrap.appendChild(audioPlayerWidget(G.speakerBuf,`${speakerName}'s reversed voice`));
 
   } else if (room.mode==='noise') {
     const {creatorName,ranking}=result;
@@ -2138,9 +2148,9 @@ function initSocket(onReady) {
   });
 
   // ── Live feeds ───────────────────────────────────────────────
-  s.on('guess_in', ({name,correct,firstCorrect,points}) => {
+  s.on('guess_in', ({name,correct,points}) => {
     const msg=correct
-      ?`✅ <strong>${esc(name)}</strong> got it! ${firstCorrect?'+100':'+'+(points||60)} pts`
+      ?`✅ <strong>${esc(name)}</strong> got it! +${points} pts`
       :`❌ <strong>${esc(name)}</strong> guessed wrong`;
     addFeedItem(msg,correct?'correct':'wrong');
     if (correct) toast(`${name} got it!`,'success');
