@@ -59,6 +59,11 @@ const G = {
   wiMyVotePid:      null,
   wiGuessSubmitted: false,
   _wiLastPhase:     null,
+  // Mode 6 — Word Reverse
+  wrWord:           null,
+  wrAudioBuf:       null,
+  wrVoted:          false,
+  wrMyVote:         null,
   // Mode 1 name hint
   nameHint:     null,
   // phase timers
@@ -470,6 +475,7 @@ function showLanding() {
           <span class="mode-pill">🕵️ Voice Disguise</span>
           <span class="mode-pill">📞 Broken Telephone</span>
           <span class="mode-pill">🕵🏽 Word Imposter</span>
+          <span class="mode-pill">⬅️ Word Reverse</span>
         </div>
       </div>
 
@@ -582,7 +588,15 @@ function showLobby() {
   const me     = room.players.find(p => p.id === G.myId);
   const canStart = amHost && room.players.length >= 2;
 
-  const modeLabel = { reverse:'🔀 Reverse Voice', noise:'🔊 Noise Mimic', imposter:'🕵️ Voice Disguise', telephone:'📞 Broken Telephone', word_imposter:'🕵🏽 Word Imposter' };
+  const isMy = room.language === 'my';
+  const modeLabel = {
+    reverse: isMy ? '🔀 Suara Terbalik' : '🔀 Reverse Voice',
+    noise: isMy ? '🔊 Tiru Bunyi' : '🔊 Noise Mimic',
+    imposter: isMy ? '🕵️ Samaran Suara' : '🕵️ Voice Disguise',
+    telephone: isMy ? '📞 Telefon Rosak' : '📞 Broken Telephone',
+    word_imposter: isMy ? '🕵🏽 Kata Penipu' : '🕵🏽 Word Imposter',
+    word_reverse: isMy ? '⬅️ Balik Kata' : '⬅️ Word Reverse',
+  };
 
   render(`
     <div class="screen">
@@ -615,32 +629,44 @@ function showLobby() {
 
       ${amHost?`
       <div class="card card-glow-blue">
-        <h3>Game Mode</h3>
+        <h3>${isMy ? 'Bahasa / Language' : 'Language / Bahasa'}</h3>
+        <div class="lang-btns">
+          <button class="lang-btn ${!isMy?'active':''}" id="lang-en">🇬🇧 English</button>
+          <button class="lang-btn ${isMy?'active':''}"  id="lang-my">🇲🇾 Bahasa Melayu</button>
+        </div>
+      </div>
+      <div class="card card-glow-blue">
+        <h3>${isMy ? 'Mod Permainan' : 'Game Mode'}</h3>
         <div class="mode-grid">
           <button class="btn-mode-card ${room.mode==='reverse'?'active':''}" id="mode-rev">
             <span class="mode-card-icon">🔀</span>
-            <span class="mode-card-name">Reverse Voice</span>
-            <span class="mode-card-desc">Guess the celebrity from reversed audio</span>
+            <span class="mode-card-name">${isMy?'Suara Terbalik':'Reverse Voice'}</span>
+            <span class="mode-card-desc">${isMy?'Teka selebriti dari audio terbalik':'Guess the celebrity from reversed audio'}</span>
           </button>
           <button class="btn-mode-card ${room.mode==='noise'?'active':''}" id="mode-noise">
             <span class="mode-card-icon">🔊</span>
-            <span class="mode-card-name">Noise Mimic</span>
-            <span class="mode-card-desc">Copy a sound — AI judges accuracy</span>
+            <span class="mode-card-name">${isMy?'Tiru Bunyi':'Noise Mimic'}</span>
+            <span class="mode-card-desc">${isMy?'Tiru bunyi — AI nilai ketepatan':'Copy a sound — AI judges accuracy'}</span>
           </button>
           <button class="btn-mode-card ${room.mode==='imposter'?'active':''}" id="mode-imp">
             <span class="mode-card-icon">🕵️</span>
-            <span class="mode-card-name">Voice Disguise</span>
-            <span class="mode-card-desc">Imposter speaks disguised — guess who!</span>
+            <span class="mode-card-name">${isMy?'Samaran Suara':'Voice Disguise'}</span>
+            <span class="mode-card-desc">${isMy?'Penyamar bercakap dalam samaran — teka siapa!':'Imposter speaks disguised — guess who!'}</span>
           </button>
           <button class="btn-mode-card ${room.mode==='telephone'?'active':''}" id="mode-tel">
             <span class="mode-card-icon">📞</span>
-            <span class="mode-card-name">Broken Telephone</span>
-            <span class="mode-card-desc">Pass audio down the chain — how much distorts?</span>
+            <span class="mode-card-name">${isMy?'Telefon Rosak':'Broken Telephone'}</span>
+            <span class="mode-card-desc">${isMy?'Sebarkan audio sepanjang rantaian — berapa banyak berubah?':'Pass audio down the chain — how much distorts?'}</span>
           </button>
-          <button class="btn-mode-card mode-card-wide ${room.mode==='word_imposter'?'active':''}" id="mode-wi">
+          <button class="btn-mode-card ${room.mode==='word_imposter'?'active':''}" id="mode-wi">
             <span class="mode-card-icon">🕵🏽</span>
-            <span class="mode-card-name">Word Imposter</span>
-            <span class="mode-card-desc">Everyone has a secret word — one imposter has a different one. Find them!</span>
+            <span class="mode-card-name">${isMy?'Kata Penipu':'Word Imposter'}</span>
+            <span class="mode-card-desc">${isMy?'Semua orang ada kata rahsia — satu penipu ada kata berbeza. Cari dia!':'Everyone has a secret word — one imposter has a different one. Find them!'}</span>
+          </button>
+          <button class="btn-mode-card mode-card-wide ${room.mode==='word_reverse'?'active':''}" id="mode-wr">
+            <span class="mode-card-icon">⬅️</span>
+            <span class="mode-card-name">${isMy?'Balik Kata':'Word Reverse'}</span>
+            <span class="mode-card-desc">${isMy?'Lihat satu perkataan — sebut terbalik! Orang lain undi sama ada betul atau tidak.':'See a word — say it backwards! Others vote if you nailed it.'}</span>
           </button>
         </div>
         ${room.mode==='word_imposter'?`
@@ -671,7 +697,8 @@ function showLobby() {
       </div>`:`
       <div class="card text-center">
         <p>Waiting for the host to start…</p>
-        <p style="font-size:.82rem;color:var(--text3)">Current mode: ${modeLabel[room.mode]||room.mode}</p>
+        <p style="font-size:.82rem;color:var(--text3)">${isMy?'Mod semasa':'Current mode'}: ${modeLabel[room.mode]||room.mode}</p>
+        <p style="font-size:.78rem;color:var(--text3)">${isMy?'Bahasa: Bahasa Melayu 🇲🇾':'Language: English 🇬🇧'}</p>
         <div class="spinner" style="margin:12px auto"></div>
       </div>`}
     </div>
@@ -692,11 +719,14 @@ function showLobby() {
       }
     };
   } else {
+    $id('lang-en').onclick    = () => G.socket.emit('host_set_language', { language:'en' });
+    $id('lang-my').onclick    = () => G.socket.emit('host_set_language', { language:'my' });
     $id('mode-rev').onclick   = () => G.socket.emit('host_set_mode', { mode:'reverse' });
     $id('mode-noise').onclick = () => G.socket.emit('host_set_mode', { mode:'noise' });
     $id('mode-imp').onclick   = () => G.socket.emit('host_set_mode', { mode:'imposter' });
     $id('mode-tel').onclick   = () => G.socket.emit('host_set_mode', { mode:'telephone' });
     $id('mode-wi').onclick    = () => G.socket.emit('host_set_mode', { mode:'word_imposter' });
+    $id('mode-wr').onclick    = () => G.socket.emit('host_set_mode', { mode:'word_reverse' });
     document.querySelectorAll('.wi-count-btn').forEach(b => {
       b.onclick = () => G.socket.emit('wi_set_impostors', { count: parseInt(b.dataset.n) });
     });
@@ -722,18 +752,24 @@ function showLobby() {
 
 // ── MODE 1: Speaker — Category select ────────────────────────
 function showSpeakerCatSelect() {
+  const isMy = G.room?.language === 'my';
+  const myCats = isMy ? `
+    <button class="btn-cat" data-cat="my_celebs"><span class="cat-icon">🇲🇾</span>Selebriti Malaysia</button>
+    <button class="btn-cat" data-cat="my_food"><span class="cat-icon">🍜</span>Makanan Malaysia</button>
+  ` : '';
   render(`
     <div class="screen">
       ${roundBadge()}
-      <div class="role-banner speaker">🎙️ You are the Speaker</div>
-      <h2 class="text-center">Choose a category</h2>
-      <p class="text-center">Your voice will be reversed — opponents must guess!</p>
+      <div class="role-banner speaker">🎙️ ${isMy?'Anda Penutur':'You are the Speaker'}</div>
+      <h2 class="text-center">${isMy?'Pilih kategori':'Choose a category'}</h2>
+      <p class="text-center">${isMy?'Suara anda akan diterbalikkan — lawan teka!':'Your voice will be reversed — opponents must guess!'}</p>
       <div class="grid-cat">
-        <button class="btn-cat" data-cat="footballers"><span class="cat-icon">⚽</span>Footballers</button>
-        <button class="btn-cat" data-cat="singers"><span class="cat-icon">🎵</span>Singers</button>
-        <button class="btn-cat" data-cat="actors"><span class="cat-icon">🎬</span>Actors</button>
+        ${myCats}
+        <button class="btn-cat" data-cat="footballers"><span class="cat-icon">⚽</span>${isMy?'Pemain Bola':'Footballers'}</button>
+        <button class="btn-cat" data-cat="singers"><span class="cat-icon">🎵</span>${isMy?'Penyanyi':'Singers'}</button>
+        <button class="btn-cat" data-cat="actors"><span class="cat-icon">🎬</span>${isMy?'Pelakon':'Actors'}</button>
         <button class="btn-cat" data-cat="internet"><span class="cat-icon">📱</span>Internet Icons</button>
-        <button class="btn-cat" style="grid-column:1/-1" data-cat="mixed"><span class="cat-icon">🌀</span>Mixed — All Categories</button>
+        <button class="btn-cat" style="grid-column:1/-1" data-cat="mixed"><span class="cat-icon">🌀</span>${isMy?'Campur — Semua':'Mixed — All Categories'}</button>
       </div>
       ${scoreboardHTML()}
     </div>
@@ -1655,6 +1691,157 @@ function submitWiGuess() {
   G.socket.emit('wi_imposter_guess',{guess:val});
 }
 
+// ── MODE 6: Word Reverse — Show word (speaker) ────────────────
+function showWrShow() {
+  const word = G.wrWord || '…';
+  const reversed = word.split('').reverse().join('');
+  const isMy = G.room?.language === 'my';
+  render(`
+    <div class="screen">
+      ${roundBadge()}
+      <div class="role-banner speaker">🎙️ ${isMy?'Kata Anda':'Your Word'}</div>
+      <div class="card card-glow-blue text-center">
+        <small style="color:var(--text3)">${isMy?'Perkataan anda':'Your word'}</small>
+        <div class="celeb-big">${esc(word)}</div>
+        <p style="font-size:.9rem;margin-top:4px">${isMy?'Terbalik:':'Reversed:'} <strong style="color:var(--cyan);font-size:1.1rem">"${esc(reversed)}"</strong></p>
+        <p style="font-size:.82rem;color:var(--text3);margin-top:8px">${isMy?'Rakaman bermula dalam…':'Recording starts in…'}</p>
+      </div>
+      <div class="card text-center">
+        <div class="timer-bar-wrap"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
+        <div class="timer-label" id="t-lbl">5s</div>
+      </div>
+      ${scoreboardHTML()}
+    </div>
+  `);
+  const left = G.room.phaseEndEpoch ? Math.max(0,(G.room.phaseEndEpoch-Date.now())/1000) : 5;
+  startClientTimer(left, $id('t-bar'), $id('t-lbl'));
+}
+
+// ── MODE 6: Word Reverse — Record (speaker) ───────────────────
+function showWrRecord() {
+  const word = G.wrWord || '…';
+  const reversed = word.split('').reverse().join('');
+  const isMy = G.room?.language === 'my';
+  render(`
+    <div class="screen">
+      ${roundBadge()}
+      <div class="role-banner speaker">🎙️ ${isMy?'Sebut Terbalik!':'Say it Backwards!'}</div>
+      <div class="card card-glow-blue text-center">
+        <small style="color:var(--text3)">${isMy?'Perkataan anda':'Your word'}</small>
+        <div class="celeb-big">${esc(word)}</div>
+        <p style="font-size:.95rem;margin-top:6px">${isMy?'Sebut:':'Say:'} <strong style="color:var(--cyan);font-size:1.2rem">"${esc(reversed)}"</strong></p>
+      </div>
+      <div class="card">
+        <div class="record-area">
+          <button id="btn-wr-rec" class="btn-record" data-state="idle" style="display:flex">
+            <span class="rec-icon">🎤</span>
+            <span class="rec-label">${isMy?'Tahan untuk Rakam':'Hold to Record'}</span>
+          </button>
+          <div id="wr-tmr" class="rec-timer hidden"></div>
+        </div>
+        <div id="wr-prev" class="preview-area hidden">
+          <div id="wr-player"></div>
+          <div class="flex-row mt-8">
+            <button id="btn-wr-send" class="btn-primary">${isMy?'Hantar ✈️':'Submit ✈️'}</button>
+            <button id="btn-wr-rerec" class="btn-ghost">🔄 ${isMy?'Rakam Semula':'Re-record'}</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="timer-bar-wrap"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
+        <div class="timer-label" id="t-lbl">15s</div>
+      </div>
+      ${scoreboardHTML()}
+    </div>
+  `);
+  let wrBuf = null;
+  setupRecBtn('btn-wr-rec','wr-tmr',10, buf => {
+    if (!buf) return;
+    wrBuf = buf;
+    $id('wr-prev').classList.remove('hidden');
+    $id('wr-player').innerHTML = '';
+    $id('wr-player').appendChild(audioPlayerWidget(buf, isMy?'Rakaman anda':'Your recording'));
+    $id('btn-wr-send').onclick = () => {
+      if (!wrBuf) return;
+      const btn = $id('btn-wr-send'); if(btn){btn.disabled=true;btn.textContent=isMy?'Menghantar…':'Sending…';}
+      G.socket.emit('wr_audio', { audioBase64: G.audio.toBase64(wrBuf) });
+    };
+    $id('btn-wr-rerec').onclick = () => {
+      wrBuf = null; $id('wr-prev').classList.add('hidden'); $id('wr-player').innerHTML = '';
+      const b=$id('btn-wr-rec'); if(b){b.dataset.state='idle';b.querySelector('.rec-label').textContent=isMy?'Tahan untuk Rakam':'Hold to Record';}
+    };
+  });
+  const left = G.room.phaseEndEpoch ? Math.max(0,(G.room.phaseEndEpoch-Date.now())/1000) : 15;
+  startClientTimer(left, $id('t-bar'), $id('t-lbl'));
+}
+
+// ── MODE 6: Word Reverse — Vote ───────────────────────────────
+function showWrVote() {
+  const room = G.room;
+  const word = room.wrWord || '';
+  const reversed = word.split('').reverse().join('');
+  const isSpeaker = G.isSpeaker;
+  const isMy = room.language === 'my';
+  render(`
+    <div class="screen wr-vote-screen">
+      ${roundBadge()}
+      <div class="role-banner ${isSpeaker?'speaker':'guesser'}">
+        ${isSpeaker ? (isMy?'🎙️ Orang lain sedang menilai…':'🎙️ Others are judging…') : (isMy?'🗳️ Adakah mereka sebut betul?':'🗳️ Did they say it right?')}
+      </div>
+      <div class="card card-glow-blue text-center">
+        <small style="color:var(--text3)">${isMy?'Perkataannya':'The word was'}</small>
+        <div class="celeb-big">${esc(word)}</div>
+        <p style="font-size:.9rem">${isMy?'Sepatutnya berbunyi:':'Should sound like:'} <strong style="color:var(--cyan)">"${esc(reversed)}"</strong></p>
+      </div>
+      ${!isSpeaker ? `
+      <div class="card">
+        <h3>${isMy?'Dengar penutur':'Listen to the speaker'}</h3>
+        <div id="wr-vote-player"><p style="color:var(--text3);font-size:.85rem">${isMy?'Memuatkan audio…':'Loading audio…'}</p></div>
+        <div class="wr-vote-btns" style="margin-top:14px">
+          <button id="btn-wr-yes" class="btn-wr-vote btn-wr-yes ${G.wrVoted&&G.wrMyVote===true?'voted':''}" ${G.wrVoted?'disabled':''}>
+            👍 ${isMy?'Betul!':'Yes!'}
+          </button>
+          <button id="btn-wr-no" class="btn-wr-vote btn-wr-no ${G.wrVoted&&G.wrMyVote===false?'voted':''}" ${G.wrVoted?'disabled':''}>
+            👎 ${isMy?'Tak':'Nope'}
+          </button>
+        </div>
+        ${G.wrVoted?`<p class="text-center" style="color:var(--green);font-weight:700;margin-top:8px">✅ ${isMy?'Undi dihantar! Tunggu orang lain…':'Voted! Waiting for others…'}</p>`:''}
+        <p style="font-size:.82rem;color:var(--text3);margin-top:6px;text-align:center">${isMy?'Undi diterima:':'Votes in:'} ${room.wrVotesIn||0}</p>
+      </div>` :
+      `<div class="card text-center">
+        <p>${isMy?'Undi diterima:':'Votes in:'} <strong>${room.wrVotesIn||0}</strong></p>
+        <div class="spinner" style="margin:8px auto"></div>
+      </div>`}
+      <div class="card">
+        <div class="timer-bar-wrap"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
+        <div class="timer-label" id="t-lbl">20s</div>
+      </div>
+      ${scoreboardHTML()}
+    </div>
+  `);
+  if (!isSpeaker && G.wrAudioBuf) {
+    const vp = $id('wr-vote-player');
+    if (vp) { vp.innerHTML=''; vp.appendChild(audioPlayerWidget(G.wrAudioBuf, isMy?'Cuba penutur':'Speaker\'s attempt')); }
+  }
+  if (!isSpeaker && !G.wrVoted) {
+    const yesBtn=$id('btn-wr-yes'), noBtn=$id('btn-wr-no');
+    if(yesBtn) yesBtn.onclick = () => submitWrVote(true);
+    if(noBtn)  noBtn.onclick  = () => submitWrVote(false);
+  }
+  const left = room.phaseEndEpoch ? Math.max(0,(room.phaseEndEpoch-Date.now())/1000) : 20;
+  startClientTimer(left, $id('t-bar'), $id('t-lbl'));
+}
+
+function submitWrVote(thumbsUp) {
+  if (G.wrVoted) return;
+  G.wrVoted = true; G.wrMyVote = thumbsUp;
+  G.socket.emit('wr_vote', { thumbsUp });
+  document.querySelectorAll('.btn-wr-vote').forEach(b => {
+    b.disabled = true;
+    if ((thumbsUp && b.classList.contains('btn-wr-yes')) || (!thumbsUp && b.classList.contains('btn-wr-no'))) b.classList.add('voted');
+  });
+}
+
 // ── Generic waiting ───────────────────────────────────────────
 function showWaiting(msg,sub) {
   const amHost=G.room?.hostId===G.myId;
@@ -1841,6 +2028,33 @@ async function showRoundResult() {
         ${amHost?`<button id="btn-next" class="btn-primary btn-full">Next Round ➡️</button>`:'<p class="text-center" style="color:var(--text3)">Waiting for host…</p>'}
       </div>
     `);
+
+  } else if (room.mode==='word_reverse') {
+    const {word,speakerName,speakerSuccess,thumbsUp,thumbsDown,noAudio}=result;
+    const reversed = word ? word.split('').reverse().join('') : '';
+    const isMy = room.language === 'my';
+    render(`
+      <div class="screen">
+        ${roundBadge()}
+        <div class="card ${speakerSuccess?'card-glow-green':'card-glow-pink'} text-center">
+          <div style="font-size:2.5rem">${noAudio?'😶':speakerSuccess?'🎉':'😬'}</div>
+          <h2>${noAudio?(isMy?'Tiada rakaman!':'No recording!'):speakerSuccess?(isMy?'Terbaik!':'Nailed it!'):(isMy?'Hampir!':'Not quite!')}</h2>
+          <p>${isMy?'Perkataannya:':'The word was:'} <strong>${esc(word)}</strong></p>
+          <p style="font-size:.9rem;color:var(--text2)">${isMy?'Sepatutnya:':'Should sound like:'} <strong style="color:var(--cyan)">"${esc(reversed)}"</strong></p>
+          ${speakerSuccess?`<p style="color:var(--green);font-weight:700;margin-top:6px">${esc(speakerName)} +100 pts!</p>`:''}
+        </div>
+        <div class="card text-center">
+          <h3>${isMy?'Undi':'Votes'}</h3>
+          <div style="display:flex;gap:24px;justify-content:center;font-size:1.4rem;margin-top:8px">
+            <span>👍 ${thumbsUp}</span>
+            <span>👎 ${thumbsDown}</span>
+          </div>
+          ${!noAudio&&!speakerSuccess?`<p style="font-size:.82rem;color:var(--text3);margin-top:6px">${isMy?'Majoriti kata salah':'Majority said nope'}</p>`:''}
+        </div>
+        ${scoreboardHTML()}
+        ${amHost?`<button id="btn-next" class="btn-primary btn-full">${isMy?'Pusingan Seterusnya ➡️':'Next Round ➡️'}</button>`:`<p class="text-center" style="color:var(--text3)">${isMy?'Menunggu hos…':'Waiting for host…'}</p>`}
+      </div>
+    `);
   }
 
   if (amHost) { const nb=$id('btn-next'); if(nb) nb.onclick=()=>G.socket.emit('next_round'); }
@@ -1963,6 +2177,13 @@ function renderPhase() {
       return showWiVote();
     }
     case 'wi_guess':   return showWiGuess();
+    case 'wr_show':   return G.isSpeaker ? showWrShow() : showWaiting(G.room.language==='my'?'Penutur sedang membaca perkataan…':'Speaker is reading the word…', G.room.language==='my'?'Bersedia untuk menilai!':'Get ready to judge!');
+    case 'wr_record': return G.isSpeaker ? showWrRecord() : showWaiting(G.room.language==='my'?'Penutur sedang merakam…':'Speaker is recording…', '');
+    case 'wr_vote': {
+      if (!G.isSpeaker && !G.wrAudioBuf) return showWaiting(G.room.language==='my'?'Memuatkan audio…':'Loading audio…','');
+      if (!G.isSpeaker && $app().querySelector('.wr-vote-screen') && !G.wrVoted) return;
+      return showWrVote();
+    }
     case 'round_result':   return showRoundResult();
     case 'final':          return showPodium();
     default:               return showWaiting('Loading…','');
@@ -2030,6 +2251,7 @@ function initSocket(onReady) {
       G.wiRole=null; G.wiWord=null; G.wiClueSubmitted=false;
       G.wiVoted=false; G.wiMyVotePid=null; G.wiGuessSubmitted=false;
       G._wiLastPhase=null;
+      G.wrWord=null; G.wrAudioBuf=null; G.wrVoted=false; G.wrMyVote=null;
     }
 
     // WI phase transition resets (between cycles)
@@ -2058,6 +2280,8 @@ function initSocket(onReady) {
       try { G.speakerBuf=await G.audio.fromBase64(room.speakerAudio); } catch(e) {}
     if (room.phase==='imposter_vote' && room.imposterAudio && !G.imposterAudioBuf && G.audio)
       try { G.imposterAudioBuf=await G.audio.fromBase64(room.imposterAudio); } catch(e) {}
+    if (room.phase==='wr_vote' && !G.isSpeaker && room.wrSpeakerAudio && !G.wrAudioBuf && G.audio)
+      try { G.wrAudioBuf=await G.audio.fromBase64(room.wrSpeakerAudio); } catch(e) {}
 
     renderPhase();
   });
@@ -2138,6 +2362,21 @@ function initSocket(onReady) {
 
   s.on('wi_guess_prompt', () => {
     if (G.room?.phase==='wi_guess') showWiGuess();
+  });
+
+  // ── Mode 6 — Word Reverse ────────────────────────────────────
+  s.on('wr_your_word', ({ word }) => {
+    G.wrWord = word;
+    if (G.room?.phase==='wr_show') showWrShow();
+    else if (G.room?.phase==='wr_record') showWrRecord();
+  });
+
+  s.on('wr_audio_relay', async ({ audioBase64 }) => {
+    if (G.isSpeaker) return;
+    try {
+      G.wrAudioBuf = await G.audio.fromBase64(audioBase64);
+      if (G.room?.phase==='wr_vote') showWrVote();
+    } catch(e) { console.error('wr_audio_relay:', e); }
   });
 
   // ── Name hint ────────────────────────────────────────────────

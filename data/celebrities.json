@@ -38,5 +38,25 @@
     "Jacksepticeye", "Lilly Singh", "James Charles", "Bella Poarch",
     "Cody Ko", "Danny Gonzalez", "Valkyrae", "Pokimane",
     "Corpse Husband", "Dream", "GeorgeNotFound", "Technoblade"
+  ],
+  "my_celebs": [
+    "Siti Nurhaliza", "Yuna", "Shila Amzah", "Faizal Tahir", "Jaclyn Victor",
+    "Misha Omar", "Amylea", "Aliff Aziz", "Ziana Zain", "Ella",
+    "Amy Search", "Dayang Nurfaizah", "Ning Baizura", "Hael Husaini", "Hazama",
+    "Aizat Amdan", "Noh Salleh", "Najwa Latif", "Dato Siti", "Dato David",
+    "Remy Ishak", "Aaron Aziz", "Fattah Amin", "Zul Ariffin", "Shaheizy Sam",
+    "Farid Kamil", "Nora Danish", "Fazura", "Lisa Surihani", "Fasha Sandha",
+    "Zizan Razak", "Harith Iskander", "Nabil Ahmad", "Awal Ashaari",
+    "Lee Chong Wei", "Nicol David", "Azizulhasni Awang", "Pandelela Rinong",
+    "Rashid Sidek", "Misbun Sidek"
+  ],
+  "my_food": [
+    "Nasi Lemak", "Roti Canai", "Char Kway Teow", "Asam Laksa", "Satay",
+    "Nasi Goreng", "Teh Tarik", "Rendang", "Mee Goreng", "Otak-otak",
+    "Nasi Dagang", "Lontong", "Cendol", "Ais Kacang", "Keropok Lekor",
+    "Murtabak", "Nasi Kerabu", "Laksa Johor", "Bak Kut Teh", "Wonton Mee",
+    "Pasembor", "Curry Laksa", "Sup Tulang", "Tauhu Goreng", "Nasi Kandar",
+    "Laksa Penang", "Popiah", "Rojak", "Cucur Udang", "Karipap",
+    "Bihun Sup", "Nasi Campur", "Kuih Lapis", "Pandan Cake", "Sago Gula Melaka"
   ]
 }

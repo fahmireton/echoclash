@@ -10,6 +10,63 @@ const CELEBS        = require('./data/celebrities.json');
 const WORD_PAIRS_RAW  = require('./data/word_pairs.json');
 const WORD_PAIRS_FLAT = Object.values(WORD_PAIRS_RAW).flat();
 
+const WORD_REVERSE_WORDS_EN = [
+  "apple","banana","mango","grape","melon","lemon","lime","peach","plum","pear",
+  "cherry","orange","kiwi","papaya","guava","berry","fig","coconut","date","avocado",
+  "cat","dog","fish","bird","lion","tiger","bear","wolf","fox","deer",
+  "cow","pig","hen","duck","frog","snake","horse","goat","lamb","owl",
+  "crow","swan","crab","shark","whale","eagle","rabbit","monkey","panda","zebra",
+  "rice","cake","bread","soup","pizza","salad","pasta","steak","toast","egg",
+  "milk","tea","water","juice","candy","sugar","salt","butter","cheese","noodle",
+  "donut","cookie","chip","jam","honey","pepper","cream","bacon","taco","burger",
+  "chair","table","door","book","phone","lamp","clock","pencil","pen","cup",
+  "bowl","fork","knife","spoon","brush","mirror","pillow","bottle","box","bag",
+  "key","lock","rope","bell","coin","ring","drum","flute","guitar","piano",
+  "tree","flower","cloud","rain","sun","moon","star","wind","snow","fire",
+  "rock","sand","lake","river","ocean","forest","mountain","island","grass","leaf",
+  "wave","storm","soil","mud","dust","ice","fog","seed","root","branch",
+  "hand","foot","head","eye","ear","nose","arm","leg","tooth","hair",
+  "face","neck","back","skin","bone","heart","knee","elbow","finger","thumb",
+  "red","blue","green","white","black","brown","pink","gold","silver","purple",
+  "home","park","shop","farm","road","bridge","tower","church","hotel","market",
+  "beach","city","town","village","castle","court","stage","camp","cave","hill",
+  "shirt","pants","shoes","hat","coat","dress","socks","gloves","scarf","belt",
+  "tie","jacket","boots","jeans","skirt","cap","vest","apron","mask","suit",
+  "ball","goal","run","jump","swim","kick","catch","throw","race","game",
+  "car","bus","train","plane","boat","ship","truck","bike","van","taxi",
+  "music","video","movie","story","dream","magic","power","space","earth","world",
+  "night","light","dark","time","money","gift","wish","hope","love","friend",
+  "map","flag","wall","step","path","mark","sign","word","name","code",
+  "play","work","rest","read","write","draw","sing","dance","laugh","smile",
+  "push","pull","hold","drop","lift","bend","turn","roll","fold","wrap",
+  "baby","girl","boy","man","woman","kid","king","queen","team","bat",
+];
+
+const WORD_REVERSE_WORDS_MY = [
+  "kucing","anjing","ikan","ayam","harimau","gajah","burung","katak","ular","kuda",
+  "kambing","lembu","itik","arnab","monyet","helang","ketam","paus","rusa","babi",
+  "pisang","mangga","nenas","tembikai","limau","durian","rambutan","betik","jambu","kelapa",
+  "nangka","manggis","langsat","duku","salak","ciku","anggur","kurma","longan","pokok",
+  "nasi","mee","roti","lauk","daging","sayur","sup","kari","sambal","kuih",
+  "biskut","kek","aiskrim","gula","garam","lada","santan","telur","sos","tepung",
+  "kerusi","meja","pintu","buku","telefon","lampu","jam","pensel","pen","cawan",
+  "mangkuk","garpu","pisau","sudu","berus","cermin","bantal","botol","kotak","beg",
+  "kunci","loceng","gitar","piano","dram","seruling","cincin","benang","tali","sapu",
+  "bunga","awan","hujan","matahari","bulan","bintang","angin","api","batu","pasir",
+  "tasik","sungai","lautan","hutan","gunung","pulau","rumput","daun","ombak","ribut",
+  "tanah","lumpur","debu","ais","kabus","benih","akar","dahan","ranting","laut",
+  "tangan","kaki","kepala","mata","telinga","hidung","lengan","gigi","rambut","muka",
+  "leher","belakang","kulit","tulang","jantung","lutut","siku","jari","dagu","dada",
+  "merah","biru","hijau","putih","hitam","coklat","emas","perak","ungu","kuning",
+  "rumah","taman","kedai","ladang","jalan","jambatan","menara","hotel","pasar","pantai",
+  "bandar","kampung","istana","masjid","sekolah","hospital","gereja","kolam","padang","kuil",
+  "baju","seluar","kasut","topi","kot","gaun","stokin","jaket","sarung","tudung",
+  "bola","gol","lari","lompat","renang","tendang","tangkap","lumba","pasukan","raket",
+  "kereta","bas","tren","kapal","bot","lori","basikal","van","teksi","moto",
+  "muzik","video","cerita","impian","sihir","kuasa","bumi","malam","cahaya","gelap",
+  "masa","wang","hadiah","harapan","kawan","cinta","nama","kata","dapur","pagar",
+];
+
 const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server, {
@@ -36,6 +93,9 @@ const WI_CLUE_SECS    = 30;
 const WI_DISCUSS_SECS = 90;
 const WI_VOTE_SECS    = 35;
 const WI_GUESS_SECS   = 20;
+const WR_SHOW_SECS    = 5;
+const WR_RECORD_SECS  = 15;
+const WR_VOTE_SECS    = 20;
 
 // ── Content pools ──────────────────────────────────────────────────────────
 const IMPOSTER_PROMPTS = [
@@ -150,7 +210,8 @@ function computeNameHint(name, timeLeftMs) {
 function mkRoom(code, hostId) {
   return {
     code, hostId,
-    mode: 'reverse',  // 'reverse' | 'noise' | 'imposter' | 'telephone'
+    mode: 'reverse',
+    language: 'en',
     roundCount: 10,
     currentRound: 0,
     phase: 'lobby',
@@ -176,6 +237,8 @@ function mkRoom(code, hostId) {
     wiClueOrder: [], wiCurrentClueIdx: 0,
     wiClues: new Map(), wiVotes: new Map(),
     wiEliminated: [], wiCycleCount: 0, wiMaxCycles: 3,
+    // Mode 6 — Word Reverse
+    wrWord: null, wrSpeakerAudio: null, wrVotes: new Map(),
     // Timers
     phaseTimer: null, phaseEndEpoch: null, roundResult: null, hintInterval: null,
   };
@@ -187,7 +250,7 @@ function mkPlayer(id, socketId, name, isHost) {
 
 function snapshot(room) {
   return {
-    code: room.code, hostId: room.hostId, mode: room.mode,
+    code: room.code, hostId: room.hostId, mode: room.mode, language: room.language,
     roundCount: room.roundCount, currentRound: room.currentRound, phase: room.phase,
     players: [...room.players.values()].map(p => ({
       id: p.id, name: p.name, score: p.score,
@@ -227,6 +290,10 @@ function snapshot(room) {
     wiVotesIn: room.phase === 'wi_vote' ? room.wiVotes.size : null,
     wiEliminated: room.wiEliminated || [],
     wiCycleCount: room.wiCycleCount || 0,
+    // Mode 6
+    wrWord: room.mode === 'word_reverse' && ['wr_vote','round_result'].includes(room.phase) ? room.wrWord : null,
+    wrSpeakerAudio: room.phase === 'wr_vote' ? room.wrSpeakerAudio : null,
+    wrVotesIn: room.phase === 'wr_vote' ? room.wrVotes.size : null,
   };
 }
 
@@ -262,6 +329,7 @@ function startRound(room) {
   room.wiAssignments.clear(); room.wiWords.clear(); room.wiClues.clear(); room.wiVotes.clear();
   room.wiEliminated = []; room.wiCycleCount = 0; room.wiCurrentClueIdx = 0; room.wiClueOrder = [];
   room.wiCivilianWord = null; room.wiImposterWord = null;
+  room.wrWord = null; room.wrSpeakerAudio = null; room.wrVotes.clear();
 
   if (room.mode === 'reverse') {
     room.speakerIdx = (room.currentRound - 1) % room.speakerOrder.length;
@@ -292,6 +360,9 @@ function startRound(room) {
 
   } else if (room.mode === 'word_imposter') {
     startWiGame(room);
+
+  } else if (room.mode === 'word_reverse') {
+    startWordReverse(room);
 
   } else if (room.mode === 'telephone') {
     room.telephoneChain = [...room.speakerOrder];
@@ -585,6 +656,66 @@ function finalizeWiGame(room, winner, imposterGuessedCorrectly) {
   setPhaseTimer(room, 12000, () => advanceFromResult(room));
 }
 
+// ── Mode 6 helpers ─────────────────────────────────────────────
+function startWordReverse(room) {
+  const words = room.language === 'my' ? WORD_REVERSE_WORDS_MY : WORD_REVERSE_WORDS_EN;
+  room.wrWord = randItem(words);
+  room.wrSpeakerAudio = null;
+  room.wrVotes.clear();
+  room.speakerIdx = (room.currentRound - 1) % room.speakerOrder.length;
+  room.phase = 'wr_show';
+  broadcastRoom(room);
+  const speaker = room.players.get(room.speakerOrder[room.speakerIdx]);
+  if (speaker) io.to(speaker.socketId).emit('wr_your_word', { word: room.wrWord });
+  setPhaseTimer(room, WR_SHOW_SECS * 1000, () => {
+    room.phase = 'wr_record';
+    broadcastRoom(room);
+    setPhaseTimer(room, WR_RECORD_SECS * 1000, () => startWrVote(room));
+  });
+}
+
+function startWrVote(room) {
+  clearPhaseTimer(room);
+  room.phase = 'wr_vote';
+  broadcastRoom(room);
+  if (room.wrSpeakerAudio) {
+    const spId = room.speakerOrder[room.speakerIdx];
+    for (const p of room.players.values()) {
+      if (p.id !== spId && p.connected) {
+        io.to(p.socketId).emit('wr_audio_relay', { audioBase64: room.wrSpeakerAudio });
+      }
+    }
+  }
+  setPhaseTimer(room, WR_VOTE_SECS * 1000, () => finalizeWrVote(room));
+}
+
+function finalizeWrVote(room) {
+  clearPhaseTimer(room);
+  const spId = room.speakerOrder[room.speakerIdx];
+  const speaker = room.players.get(spId);
+  const nonSpeakerIds = [...room.players.keys()].filter(id => id !== spId);
+  const totalVoters = nonSpeakerIds.length;
+  let thumbsUp = 0, thumbsDown = 0;
+  for (const vote of room.wrVotes.values()) {
+    if (vote) thumbsUp++; else thumbsDown++;
+  }
+  const speakerSuccess = !!(room.wrSpeakerAudio && totalVoters > 0 && thumbsUp > thumbsDown);
+  if (speakerSuccess && speaker) speaker.score += 100;
+  const majorityVote = thumbsUp >= thumbsDown;
+  for (const [pid, vote] of room.wrVotes) {
+    if (vote === majorityVote) { const p = room.players.get(pid); if (p) p.score += 25; }
+  }
+  room.roundResult = {
+    word: room.wrWord,
+    speakerId: spId, speakerName: speaker?.name ?? '',
+    speakerSuccess, thumbsUp, thumbsDown, noAudio: !room.wrSpeakerAudio,
+    scores: [...room.players.values()].map(p => ({ id: p.id, name: p.name, score: p.score })),
+  };
+  room.phase = 'round_result';
+  broadcastRoom(room);
+  setPhaseTimer(room, 8000, () => advanceFromResult(room));
+}
+
 function advanceFromResult(room) {
   clearPhaseTimer(room);
   if (room.currentRound >= room.roundCount) endGame(room);
@@ -675,6 +806,8 @@ io.on('connection', socket => {
         socket.emit('wi_your_turn', { clueIdx: room.wiCurrentClueIdx });
       }
     }
+    if (['wr_show','wr_record'].includes(room.phase) && room.speakerOrder[room.speakerIdx] === playerId && room.wrWord)
+      socket.emit('wr_your_word', { word: room.wrWord });
     if (room.phase === 'telephone_chain') {
       const myIdx = room.telephoneChain.indexOf(playerId);
       if (myIdx === room.telephoneCurrentIdx) {
@@ -703,7 +836,13 @@ io.on('connection', socket => {
   socket.on('host_set_mode', ({ mode }) => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'lobby' || room.hostId !== socket.playerId) return;
-    if (['reverse','noise','imposter','telephone','word_imposter'].includes(mode)) { room.mode = mode; broadcastRoom(room); }
+    if (['reverse','noise','imposter','telephone','word_imposter','word_reverse'].includes(mode)) { room.mode = mode; broadcastRoom(room); }
+  });
+
+  socket.on('host_set_language', ({ language }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'lobby' || room.hostId !== socket.playerId) return;
+    if (['en','my'].includes(language)) { room.language = language; broadcastRoom(room); }
   });
 
   socket.on('host_set_rounds', ({ count }) => {
@@ -727,7 +866,9 @@ io.on('connection', socket => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'speaker_cat') return;
     if (room.speakerOrder[room.speakerIdx] !== socket.playerId) return;
-    const valid = ['footballers','singers','actors','internet','mixed'];
+    const valid = room.language === 'my'
+      ? ['footballers','singers','actors','internet','mixed','my_celebs','my_food']
+      : ['footballers','singers','actors','internet','mixed'];
     if (!valid.includes(category)) return;
     room.selectedCat = category;
     const options = getCelebs(category, 5, room.usedCelebs);
@@ -879,6 +1020,26 @@ io.on('connection', socket => {
     if (room.wiVotes.size >= alivePids.length) finalizeWiVote(room);
   });
 
+  // ── Mode 6 — Word Reverse ──────────────────────────────────────
+  socket.on('wr_audio', ({ audioBase64 }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'wr_record') return;
+    if (room.speakerOrder[room.speakerIdx] !== socket.playerId) return;
+    room.wrSpeakerAudio = audioBase64;
+    startWrVote(room);
+  });
+
+  socket.on('wr_vote', ({ thumbsUp }) => {
+    const room = roomOf(socket);
+    if (!room || room.phase !== 'wr_vote') return;
+    if (room.speakerOrder[room.speakerIdx] === socket.playerId) return;
+    if (room.wrVotes.has(socket.playerId)) return;
+    room.wrVotes.set(socket.playerId, !!thumbsUp);
+    broadcastRoom(room);
+    const nonSpeakerCount = [...room.players.keys()].filter(id => id !== room.speakerOrder[room.speakerIdx]).length;
+    if (room.wrVotes.size >= nonSpeakerCount) finalizeWrVote(room);
+  });
+
   socket.on('wi_imposter_guess', ({ guess }) => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'wi_guess') return;
@@ -943,6 +1104,7 @@ io.on('connection', socket => {
     if (room.hostId !== socket.playerId) return;
     for (const p of room.players.values()) { p.score = 0; p.ready = false; }
     room.currentRound = 0; room.usedCelebs = [];
+    room.wrWord = null; room.wrSpeakerAudio = null; room.wrVotes.clear();
     room.speakerOrder = shuffle([...room.players.keys()]);
     startRound(room);
   });
@@ -953,6 +1115,7 @@ io.on('connection', socket => {
     if (room.hostId !== socket.playerId) return;
     for (const p of room.players.values()) { p.score = 0; p.ready = false; }
     room.currentRound = 0; room.usedCelebs = [];
+    room.wrWord = null; room.wrSpeakerAudio = null; room.wrVotes.clear();
     room.phase = 'lobby';
     clearPhaseTimer(room);
     broadcastRoom(room);
@@ -1006,6 +1169,7 @@ io.on('connection', socket => {
     room.wiAssignments.clear(); room.wiWords.clear(); room.wiClues.clear(); room.wiVotes.clear();
     room.wiEliminated = []; room.wiCycleCount = 0; room.wiCurrentClueIdx = 0; room.wiClueOrder = [];
     room.wiCivilianWord = null; room.wiImposterWord = null;
+    room.wrWord = null; room.wrSpeakerAudio = null; room.wrVotes.clear();
     broadcastRoom(room);
   });
 

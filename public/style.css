@@ -463,6 +463,29 @@ input::placeholder { color: var(--text3); }
 .wi-count-btn.active { border-color: var(--blue); background: rgba(0,212,255,.12); color: var(--blue); }
 .wi-count-btn:hover:not(.active) { border-color: rgba(0,212,255,.4); }
 
+/* ── Language selector ───────────────────────────────────────────────────── */
+.lang-btns { display: flex; gap: 8px; }
+.lang-btn {
+  flex: 1; background: var(--surface); border: 2px solid var(--border);
+  color: var(--text); padding: 12px; border-radius: var(--radius-sm);
+  font-size: .95rem; font-weight: 700; transition: all .2s;
+}
+.lang-btn.active { border-color: var(--blue); background: rgba(0,212,255,.12); color: var(--blue); }
+.lang-btn:hover:not(.active) { border-color: rgba(0,212,255,.4); }
+
+/* ── Word Reverse (Mode 6) ───────────────────────────────────────────────── */
+.wr-vote-btns { display: flex; gap: 12px; }
+.btn-wr-vote {
+  flex: 1; padding: 18px; border-radius: var(--radius-sm);
+  font-size: 1.25rem; font-weight: 900; border: 2px solid var(--border);
+  background: var(--surface); color: var(--text); transition: all .2s;
+}
+.btn-wr-vote.btn-wr-yes:hover:not(:disabled) { border-color: var(--green); background: rgba(57,255,20,.12); color: var(--green); }
+.btn-wr-vote.btn-wr-no:hover:not(:disabled)  { border-color: var(--red);   background: rgba(255,51,51,.12);  color: var(--red); }
+.btn-wr-vote.voted.btn-wr-yes { border-color: var(--green); background: rgba(57,255,20,.18); color: var(--green); }
+.btn-wr-vote.voted.btn-wr-no  { border-color: var(--red);   background: rgba(255,51,51,.18);  color: var(--red); }
+.btn-wr-vote:disabled { opacity: .55; cursor: not-allowed; }
+
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 380px) {
   h1 { font-size: 1.8rem; }
