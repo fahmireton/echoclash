@@ -61,9 +61,7 @@ const G = {
   _wiLastPhase:     null,
   // Mode 6 — Word Reverse
   wrWord:           null,
-  wrAudioBuf:       null,
-  wrVoted:          false,
-  wrMyVote:         null,
+  wrSubmitted:      false,
   // Mode 1 name hint
   nameHint:     null,
   // phase timers
@@ -1691,7 +1689,7 @@ function submitWiGuess() {
   G.socket.emit('wi_imposter_guess',{guess:val});
 }
 
-// ── MODE 6: Word Reverse — Show word (speaker) ────────────────
+// ── MODE 6: Word Reverse — Show word (everyone) ───────────────
 function showWrShow() {
   const word = G.wrWord || '…';
   const reversed = word.split('').reverse().join('');
@@ -1699,15 +1697,16 @@ function showWrShow() {
   render(`
     <div class="screen">
       ${roundBadge()}
-      <div class="role-banner speaker">🎙️ ${isMy?'Kata Anda':'Your Word'}</div>
+      <div class="role-banner speaker">⬅️ ${isMy?'Balik Kata!':'Word Reverse!'}</div>
       <div class="card card-glow-blue text-center">
-        <small style="color:var(--text3)">${isMy?'Perkataan anda':'Your word'}</small>
+        <small style="color:var(--text3)">${isMy?'Perkataan pusingan ini:':'This round\'s word:'}</small>
         <div class="celeb-big">${esc(word)}</div>
-        <p style="font-size:.9rem;margin-top:4px">${isMy?'Terbalik:':'Reversed:'} <strong style="color:var(--cyan);font-size:1.1rem">"${esc(reversed)}"</strong></p>
-        <p style="font-size:.82rem;color:var(--text3);margin-top:8px">${isMy?'Rakaman bermula dalam…':'Recording starts in…'}</p>
+        <p style="font-size:.9rem;margin-top:4px">${isMy?'Terbalik:':'Say it backwards:'} <strong style="color:var(--cyan);font-size:1.15rem">"${esc(reversed)}"</strong></p>
+        <p style="font-size:.82rem;color:var(--text3);margin-top:10px">${isMy?'Semua orang rakam — terbaik menang!':'Everyone records — best reversal wins!'}</p>
       </div>
       <div class="card text-center">
-        <div class="timer-bar-wrap"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
+        <p style="font-size:.85rem;color:var(--text2)">${isMy?'Rakaman bermula dalam…':'Recording starts in…'}</p>
+        <div class="timer-bar-wrap" style="margin-top:6px"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
         <div class="timer-label" id="t-lbl">5s</div>
       </div>
       ${scoreboardHTML()}
@@ -1717,21 +1716,25 @@ function showWrShow() {
   startClientTimer(left, $id('t-bar'), $id('t-lbl'));
 }
 
-// ── MODE 6: Word Reverse — Record (speaker) ───────────────────
+// ── MODE 6: Word Reverse — Record (everyone simultaneously) ───
 function showWrRecord() {
   const word = G.wrWord || '…';
   const reversed = word.split('').reverse().join('');
   const isMy = G.room?.language === 'my';
+  const room = G.room;
   render(`
-    <div class="screen">
+    <div class="screen wr-record-screen">
       ${roundBadge()}
-      <div class="role-banner speaker">🎙️ ${isMy?'Sebut Terbalik!':'Say it Backwards!'}</div>
+      <div class="role-banner speaker">🎤 ${isMy?'Semua Rekod Sekarang!':'Everyone Record Now!'}</div>
       <div class="card card-glow-blue text-center">
-        <small style="color:var(--text3)">${isMy?'Perkataan anda':'Your word'}</small>
+        <small style="color:var(--text3)">${isMy?'Perkataan':'Word'}</small>
         <div class="celeb-big">${esc(word)}</div>
-        <p style="font-size:.95rem;margin-top:6px">${isMy?'Sebut:':'Say:'} <strong style="color:var(--cyan);font-size:1.2rem">"${esc(reversed)}"</strong></p>
+        <p style="font-size:1rem;margin-top:6px">${isMy?'Sebut:':'Say:'} <strong style="color:var(--cyan);font-size:1.25rem">"${esc(reversed)}"</strong></p>
       </div>
       <div class="card">
+        ${G.wrSubmitted ? `
+          <div class="text-center" style="color:var(--green);font-weight:700;padding:14px 0">✅ ${isMy?'Rakaman dihantar! Menunggu yang lain…':'Submitted! Waiting for others…'}</div>
+        ` : `
         <div class="record-area">
           <button id="btn-wr-rec" class="btn-record" data-state="idle" style="display:flex">
             <span class="rec-icon">🎤</span>
@@ -1742,10 +1745,11 @@ function showWrRecord() {
         <div id="wr-prev" class="preview-area hidden">
           <div id="wr-player"></div>
           <div class="flex-row mt-8">
-            <button id="btn-wr-send" class="btn-primary">${isMy?'Hantar ✈️':'Submit ✈️'}</button>
+            <button id="btn-wr-send" class="btn-primary">${isMy?'Hantar ke AI ✈️':'Submit to AI ✈️'}</button>
             <button id="btn-wr-rerec" class="btn-ghost">🔄 ${isMy?'Rakam Semula':'Re-record'}</button>
           </div>
-        </div>
+        </div>`}
+        <p style="font-size:.8rem;color:var(--text3);text-align:center;margin-top:6px">${isMy?'Rekod diterima:':'Recordings in:'} ${room.wrRecordingsIn||0} / ${room.players?.length||0}</p>
       </div>
       <div class="card">
         <div class="timer-bar-wrap"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
@@ -1754,92 +1758,44 @@ function showWrRecord() {
       ${scoreboardHTML()}
     </div>
   `);
-  let wrBuf = null;
-  setupRecBtn('btn-wr-rec','wr-tmr',10, buf => {
-    if (!buf) return;
-    wrBuf = buf;
-    $id('wr-prev').classList.remove('hidden');
-    $id('wr-player').innerHTML = '';
-    $id('wr-player').appendChild(audioPlayerWidget(buf, isMy?'Rakaman anda':'Your recording'));
-    $id('btn-wr-send').onclick = () => {
-      if (!wrBuf) return;
-      const btn = $id('btn-wr-send'); if(btn){btn.disabled=true;btn.textContent=isMy?'Menghantar…':'Sending…';}
-      G.socket.emit('wr_audio', { audioBase64: G.audio.toBase64(wrBuf) });
-    };
-    $id('btn-wr-rerec').onclick = () => {
-      wrBuf = null; $id('wr-prev').classList.add('hidden'); $id('wr-player').innerHTML = '';
-      const b=$id('btn-wr-rec'); if(b){b.dataset.state='idle';b.querySelector('.rec-label').textContent=isMy?'Tahan untuk Rakam':'Hold to Record';}
-    };
-  });
+  if (!G.wrSubmitted) {
+    let wrBuf = null;
+    setupRecBtn('btn-wr-rec','wr-tmr',10, buf => {
+      if (!buf) return;
+      wrBuf = buf;
+      $id('wr-prev').classList.remove('hidden');
+      $id('wr-player').innerHTML = '';
+      $id('wr-player').appendChild(audioPlayerWidget(buf, isMy?'Rakaman anda':'Your recording'));
+      $id('btn-wr-send').onclick = () => {
+        if (!wrBuf) return;
+        const btn = $id('btn-wr-send'); if(btn){btn.disabled=true;btn.textContent=isMy?'Menghantar…':'Sending to AI…';}
+        G.wrSubmitted = true;
+        G.socket.emit('wr_audio', { audioBase64: G.audio.toBase64(wrBuf) });
+      };
+      $id('btn-wr-rerec').onclick = () => {
+        wrBuf = null; $id('wr-prev').classList.add('hidden'); $id('wr-player').innerHTML = '';
+        const b=$id('btn-wr-rec'); if(b){b.dataset.state='idle';b.querySelector('.rec-label').textContent=isMy?'Tahan untuk Rakam':'Hold to Record';}
+      };
+    });
+  }
   const left = G.room.phaseEndEpoch ? Math.max(0,(G.room.phaseEndEpoch-Date.now())/1000) : 15;
   startClientTimer(left, $id('t-bar'), $id('t-lbl'));
 }
 
-// ── MODE 6: Word Reverse — Vote ───────────────────────────────
-function showWrVote() {
-  const room = G.room;
-  const word = room.wrWord || '';
-  const reversed = word.split('').reverse().join('');
-  const isSpeaker = G.isSpeaker;
-  const isMy = room.language === 'my';
+// ── MODE 6: Word Reverse — AI Scoring ────────────────────────
+function showWrScoring() {
+  const isMy = G.room?.language === 'my';
   render(`
-    <div class="screen wr-vote-screen">
+    <div class="screen">
       ${roundBadge()}
-      <div class="role-banner ${isSpeaker?'speaker':'guesser'}">
-        ${isSpeaker ? (isMy?'🎙️ Orang lain sedang menilai…':'🎙️ Others are judging…') : (isMy?'🗳️ Adakah mereka sebut betul?':'🗳️ Did they say it right?')}
+      <div class="wait-center">
+        <div style="font-size:3rem">🤖</div>
+        <h2>${isMy?'AI sedang menilai…':'AI is analysing…'}</h2>
+        <p>${isMy?'Membalikkan audio & membandingkan':'Reversing audio &amp; comparing'}</p>
+        <div class="spinner"></div>
       </div>
-      <div class="card card-glow-blue text-center">
-        <small style="color:var(--text3)">${isMy?'Perkataannya':'The word was'}</small>
-        <div class="celeb-big">${esc(word)}</div>
-        <p style="font-size:.9rem">${isMy?'Sepatutnya berbunyi:':'Should sound like:'} <strong style="color:var(--cyan)">"${esc(reversed)}"</strong></p>
-      </div>
-      ${!isSpeaker ? `
-      <div class="card">
-        <h3>${isMy?'Dengar penutur':'Listen to the speaker'}</h3>
-        <div id="wr-vote-player"><p style="color:var(--text3);font-size:.85rem">${isMy?'Memuatkan audio…':'Loading audio…'}</p></div>
-        <div class="wr-vote-btns" style="margin-top:14px">
-          <button id="btn-wr-yes" class="btn-wr-vote btn-wr-yes ${G.wrVoted&&G.wrMyVote===true?'voted':''}" ${G.wrVoted?'disabled':''}>
-            👍 ${isMy?'Betul!':'Yes!'}
-          </button>
-          <button id="btn-wr-no" class="btn-wr-vote btn-wr-no ${G.wrVoted&&G.wrMyVote===false?'voted':''}" ${G.wrVoted?'disabled':''}>
-            👎 ${isMy?'Tak':'Nope'}
-          </button>
-        </div>
-        ${G.wrVoted?`<p class="text-center" style="color:var(--green);font-weight:700;margin-top:8px">✅ ${isMy?'Undi dihantar! Tunggu orang lain…':'Voted! Waiting for others…'}</p>`:''}
-        <p style="font-size:.82rem;color:var(--text3);margin-top:6px;text-align:center">${isMy?'Undi diterima:':'Votes in:'} ${room.wrVotesIn||0}</p>
-      </div>` :
-      `<div class="card text-center">
-        <p>${isMy?'Undi diterima:':'Votes in:'} <strong>${room.wrVotesIn||0}</strong></p>
-        <div class="spinner" style="margin:8px auto"></div>
-      </div>`}
-      <div class="card">
-        <div class="timer-bar-wrap"><div id="t-bar" class="timer-bar" style="width:100%"></div></div>
-        <div class="timer-label" id="t-lbl">20s</div>
-      </div>
-      ${scoreboardHTML()}
     </div>
   `);
-  if (!isSpeaker && G.wrAudioBuf) {
-    const vp = $id('wr-vote-player');
-    if (vp) { vp.innerHTML=''; vp.appendChild(audioPlayerWidget(G.wrAudioBuf, isMy?'Cuba penutur':'Speaker\'s attempt')); }
-  }
-  if (!isSpeaker && !G.wrVoted) {
-    const yesBtn=$id('btn-wr-yes'), noBtn=$id('btn-wr-no');
-    if(yesBtn) yesBtn.onclick = () => submitWrVote(true);
-    if(noBtn)  noBtn.onclick  = () => submitWrVote(false);
-  }
-  const left = room.phaseEndEpoch ? Math.max(0,(room.phaseEndEpoch-Date.now())/1000) : 20;
-  startClientTimer(left, $id('t-bar'), $id('t-lbl'));
-}
-
-function submitWrVote(thumbsUp) {
-  if (G.wrVoted) return;
-  G.wrVoted = true; G.wrMyVote = thumbsUp;
-  G.socket.emit('wr_vote', { thumbsUp });
-  document.querySelectorAll('.btn-wr-vote').forEach(b => {
-    b.disabled = true;
-    if ((thumbsUp && b.classList.contains('btn-wr-yes')) || (!thumbsUp && b.classList.contains('btn-wr-no'))) b.classList.add('voted');
-  });
 }
 
 // ── Generic waiting ───────────────────────────────────────────
@@ -2030,26 +1986,30 @@ async function showRoundResult() {
     `);
 
   } else if (room.mode==='word_reverse') {
-    const {word,speakerName,speakerSuccess,thumbsUp,thumbsDown,noAudio}=result;
+    const {word, ranking}=result;
     const reversed = word ? word.split('').reverse().join('') : '';
     const isMy = room.language === 'my';
+    const ICONS = ['🥇','🥈','🥉'];
     render(`
       <div class="screen">
         ${roundBadge()}
-        <div class="card ${speakerSuccess?'card-glow-green':'card-glow-pink'} text-center">
-          <div style="font-size:2.5rem">${noAudio?'😶':speakerSuccess?'🎉':'😬'}</div>
-          <h2>${noAudio?(isMy?'Tiada rakaman!':'No recording!'):speakerSuccess?(isMy?'Terbaik!':'Nailed it!'):(isMy?'Hampir!':'Not quite!')}</h2>
-          <p>${isMy?'Perkataannya:':'The word was:'} <strong>${esc(word)}</strong></p>
-          <p style="font-size:.9rem;color:var(--text2)">${isMy?'Sepatutnya:':'Should sound like:'} <strong style="color:var(--cyan)">"${esc(reversed)}"</strong></p>
-          ${speakerSuccess?`<p style="color:var(--green);font-weight:700;margin-top:6px">${esc(speakerName)} +100 pts!</p>`:''}
+        <div class="card card-glow-blue text-center">
+          <div style="font-size:2rem">⬅️</div>
+          <h2>${isMy?'Keputusan Balik Kata':'Word Reverse Results'}</h2>
+          <p>${isMy?'Kata:':'Word:'} <strong>${esc(word)}</strong></p>
+          <p style="font-size:.9rem;color:var(--text2)">${isMy?'Terbalik:':'Reversed:'} <strong style="color:var(--cyan)">"${esc(reversed)}"</strong></p>
         </div>
-        <div class="card text-center">
-          <h3>${isMy?'Undi':'Votes'}</h3>
-          <div style="display:flex;gap:24px;justify-content:center;font-size:1.4rem;margin-top:8px">
-            <span>👍 ${thumbsUp}</span>
-            <span>👎 ${thumbsDown}</span>
-          </div>
-          ${!noAudio&&!speakerSuccess?`<p style="font-size:.82rem;color:var(--text3);margin-top:6px">${isMy?'Majoriti kata salah':'Majority said nope'}</p>`:''}
+        <div class="card" id="wr-result-list" style="gap:10px;display:flex;flex-direction:column">
+          ${(ranking||[]).map(r=>`
+            <div class="mimic-row">
+              <div class="mimic-header">
+                <span class="mimic-rank">${ICONS[r.rank-1]||'#'+r.rank}</span>
+                <span class="mimic-name">${esc(r.name)} ${r.playerId===G.myId?'<span style="color:var(--blue);font-size:.75rem">(you)</span>':''}</span>
+                <span class="mimic-pct" style="color:${r.score>=75?'var(--green)':r.score>=50?'var(--orange)':'var(--red)'}">${r.submitted?r.score+'%':'—'}</span>
+                <span class="mimic-pts">${r.submitted?'+'+r.score+' pts':isMy?'Tiada rekod':'No recording'}</span>
+              </div>
+              <div class="mimic-comment">${r.score>=80?(isMy?'Sangat tepat! 🔥':'Spot on! 🔥'):r.score>=60?(isMy?'Agak hampir 👍':'Pretty close 👍'):r.score>=40?(isMy?'Hampir 😅':'Almost 😅'):r.submitted?(isMy?'Terlepas jauh 😬':'Way off 😬'):(isMy?'Tiada percubaan 💤':'No attempt 💤')}</div>
+            </div>`).join('')}
         </div>
         ${scoreboardHTML()}
         ${amHost?`<button id="btn-next" class="btn-primary btn-full">${isMy?'Pusingan Seterusnya ➡️':'Next Round ➡️'}</button>`:`<p class="text-center" style="color:var(--text3)">${isMy?'Menunggu hos…':'Waiting for host…'}</p>`}
@@ -2177,13 +2137,12 @@ function renderPhase() {
       return showWiVote();
     }
     case 'wi_guess':   return showWiGuess();
-    case 'wr_show':   return G.isSpeaker ? showWrShow() : showWaiting(G.room.language==='my'?'Penutur sedang membaca perkataan…':'Speaker is reading the word…', G.room.language==='my'?'Bersedia untuk menilai!':'Get ready to judge!');
-    case 'wr_record': return G.isSpeaker ? showWrRecord() : showWaiting(G.room.language==='my'?'Penutur sedang merakam…':'Speaker is recording…', '');
-    case 'wr_vote': {
-      if (!G.isSpeaker && !G.wrAudioBuf) return showWaiting(G.room.language==='my'?'Memuatkan audio…':'Loading audio…','');
-      if (!G.isSpeaker && $app().querySelector('.wr-vote-screen') && !G.wrVoted) return;
-      return showWrVote();
+    case 'wr_show':    return showWrShow();
+    case 'wr_record': {
+      if ($app().querySelector('.wr-record-screen') && !G.wrSubmitted) return;
+      return showWrRecord();
     }
+    case 'wr_scoring': return showWrScoring();
     case 'round_result':   return showRoundResult();
     case 'final':          return showPodium();
     default:               return showWaiting('Loading…','');
@@ -2251,7 +2210,7 @@ function initSocket(onReady) {
       G.wiRole=null; G.wiWord=null; G.wiClueSubmitted=false;
       G.wiVoted=false; G.wiMyVotePid=null; G.wiGuessSubmitted=false;
       G._wiLastPhase=null;
-      G.wrWord=null; G.wrAudioBuf=null; G.wrVoted=false; G.wrMyVote=null;
+      G.wrWord=null; G.wrSubmitted=false;
     }
 
     // WI phase transition resets (between cycles)
@@ -2280,9 +2239,6 @@ function initSocket(onReady) {
       try { G.speakerBuf=await G.audio.fromBase64(room.speakerAudio); } catch(e) {}
     if (room.phase==='imposter_vote' && room.imposterAudio && !G.imposterAudioBuf && G.audio)
       try { G.imposterAudioBuf=await G.audio.fromBase64(room.imposterAudio); } catch(e) {}
-    if (room.phase==='wr_vote' && !G.isSpeaker && room.wrSpeakerAudio && !G.wrAudioBuf && G.audio)
-      try { G.wrAudioBuf=await G.audio.fromBase64(room.wrSpeakerAudio); } catch(e) {}
-
     renderPhase();
   });
 
@@ -2369,14 +2325,6 @@ function initSocket(onReady) {
     G.wrWord = word;
     if (G.room?.phase==='wr_show') showWrShow();
     else if (G.room?.phase==='wr_record') showWrRecord();
-  });
-
-  s.on('wr_audio_relay', async ({ audioBase64 }) => {
-    if (G.isSpeaker) return;
-    try {
-      G.wrAudioBuf = await G.audio.fromBase64(audioBase64);
-      if (G.room?.phase==='wr_vote') showWrVote();
-    } catch(e) { console.error('wr_audio_relay:', e); }
   });
 
   // ── Name hint ────────────────────────────────────────────────

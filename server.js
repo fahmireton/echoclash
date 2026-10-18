@@ -95,7 +95,6 @@ const WI_VOTE_SECS    = 35;
 const WI_GUESS_SECS   = 20;
 const WR_SHOW_SECS    = 5;
 const WR_RECORD_SECS  = 15;
-const WR_VOTE_SECS    = 20;
 
 // ── Content pools ──────────────────────────────────────────────────────────
 const IMPOSTER_PROMPTS = [
@@ -238,7 +237,7 @@ function mkRoom(code, hostId) {
     wiClues: new Map(), wiVotes: new Map(),
     wiEliminated: [], wiCycleCount: 0, wiMaxCycles: 3,
     // Mode 6 — Word Reverse
-    wrWord: null, wrSpeakerAudio: null, wrVotes: new Map(),
+    wrWord: null, wrRecordings: new Map(),
     // Timers
     phaseTimer: null, phaseEndEpoch: null, roundResult: null, hintInterval: null,
   };
@@ -291,9 +290,8 @@ function snapshot(room) {
     wiEliminated: room.wiEliminated || [],
     wiCycleCount: room.wiCycleCount || 0,
     // Mode 6
-    wrWord: room.mode === 'word_reverse' && ['wr_vote','round_result'].includes(room.phase) ? room.wrWord : null,
-    wrSpeakerAudio: room.phase === 'wr_vote' ? room.wrSpeakerAudio : null,
-    wrVotesIn: room.phase === 'wr_vote' ? room.wrVotes.size : null,
+    wrWord: room.mode === 'word_reverse' ? room.wrWord : null,
+    wrRecordingsIn: room.phase === 'wr_record' ? room.wrRecordings.size : null,
   };
 }
 
@@ -329,7 +327,7 @@ function startRound(room) {
   room.wiAssignments.clear(); room.wiWords.clear(); room.wiClues.clear(); room.wiVotes.clear();
   room.wiEliminated = []; room.wiCycleCount = 0; room.wiCurrentClueIdx = 0; room.wiClueOrder = [];
   room.wiCivilianWord = null; room.wiImposterWord = null;
-  room.wrWord = null; room.wrSpeakerAudio = null; room.wrVotes.clear();
+  room.wrWord = null; room.wrRecordings.clear();
 
   if (room.mode === 'reverse') {
     room.speakerIdx = (room.currentRound - 1) % room.speakerOrder.length;
@@ -657,63 +655,88 @@ function finalizeWiGame(room, winner, imposterGuessedCorrectly) {
 }
 
 // ── Mode 6 helpers ─────────────────────────────────────────────
+// Reverse the PCM sample data of a mono 16-bit WAV (keeps header intact)
+function reverseWavBase64(b64) {
+  const bin = Buffer.from(b64, 'base64');
+  const hdr = 44;
+  if (bin.length <= hdr) return b64;
+  const samples = bin.slice(hdr);
+  const rev = Buffer.allocUnsafe(samples.length);
+  for (let i = 0; i < samples.length; i += 2) {
+    const j = samples.length - i - 2;
+    rev[i]   = j >= 0 ? samples[j]   : 0;
+    rev[i+1] = j >= 0 ? samples[j+1] : 0;
+  }
+  return Buffer.concat([bin.slice(0, hdr), rev]).toString('base64');
+}
+
 function startWordReverse(room) {
   const words = room.language === 'my' ? WORD_REVERSE_WORDS_MY : WORD_REVERSE_WORDS_EN;
   room.wrWord = randItem(words);
-  room.wrSpeakerAudio = null;
-  room.wrVotes.clear();
-  room.speakerIdx = (room.currentRound - 1) % room.speakerOrder.length;
+  room.wrRecordings.clear();
   room.phase = 'wr_show';
   broadcastRoom(room);
-  const speaker = room.players.get(room.speakerOrder[room.speakerIdx]);
-  if (speaker) io.to(speaker.socketId).emit('wr_your_word', { word: room.wrWord });
+  // Word goes to ALL players simultaneously — everyone competes
+  for (const p of room.players.values()) {
+    if (p.connected) io.to(p.socketId).emit('wr_your_word', { word: room.wrWord });
+  }
   setPhaseTimer(room, WR_SHOW_SECS * 1000, () => {
     room.phase = 'wr_record';
     broadcastRoom(room);
-    setPhaseTimer(room, WR_RECORD_SECS * 1000, () => startWrVote(room));
+    setPhaseTimer(room, WR_RECORD_SECS * 1000, () => finalizeWrRecordings(room));
   });
 }
 
-function startWrVote(room) {
+function finalizeWrRecordings(room) {
   clearPhaseTimer(room);
-  room.phase = 'wr_vote';
+  room.phase = 'wr_scoring';
   broadcastRoom(room);
-  if (room.wrSpeakerAudio) {
-    const spId = room.speakerOrder[room.speakerIdx];
-    for (const p of room.players.values()) {
-      if (p.id !== spId && p.connected) {
-        io.to(p.socketId).emit('wr_audio_relay', { audioBase64: room.wrSpeakerAudio });
-      }
-    }
-  }
-  setPhaseTimer(room, WR_VOTE_SECS * 1000, () => finalizeWrVote(room));
-}
 
-function finalizeWrVote(room) {
-  clearPhaseTimer(room);
-  const spId = room.speakerOrder[room.speakerIdx];
-  const speaker = room.players.get(spId);
-  const nonSpeakerIds = [...room.players.keys()].filter(id => id !== spId);
-  const totalVoters = nonSpeakerIds.length;
-  let thumbsUp = 0, thumbsDown = 0;
-  for (const vote of room.wrVotes.values()) {
-    if (vote) thumbsUp++; else thumbsDown++;
+  const entries = [...room.wrRecordings.entries()]; // [[pid, b64], ...]
+  const aiScores = new Map();
+
+  if (entries.length >= 2) {
+    // Reverse every recording then compare all pairs
+    const reversed = entries.map(([pid, b64]) => ({ pid, rev: reverseWavBase64(b64) }));
+    for (const a of reversed) {
+      let total = 0, count = 0;
+      for (const b of reversed) {
+        if (a.pid === b.pid) continue;
+        total += compareSounds(a.rev, b.rev);
+        count++;
+      }
+      aiScores.set(a.pid, count > 0 ? Math.round(total / count) : 50);
+    }
+  } else if (entries.length === 1) {
+    aiScores.set(entries[0][0], 80); // solo submission gets a decent score
   }
-  const speakerSuccess = !!(room.wrSpeakerAudio && totalVoters > 0 && thumbsUp > thumbsDown);
-  if (speakerSuccess && speaker) speaker.score += 100;
-  const majorityVote = thumbsUp >= thumbsDown;
-  for (const [pid, vote] of room.wrVotes) {
-    if (vote === majorityVote) { const p = room.players.get(pid); if (p) p.score += 25; }
+
+  // Players who didn't submit get 0
+  for (const pid of room.players.keys()) {
+    if (!aiScores.has(pid)) aiScores.set(pid, 0);
   }
+
+  // Award points & build ranking
+  for (const [pid, s] of aiScores) {
+    const p = room.players.get(pid);
+    if (p) p.score += s;
+  }
+
+  const ranking = [...aiScores.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([pid, score], i) => ({
+      rank: i + 1, playerId: pid,
+      name: room.players.get(pid)?.name ?? '?',
+      score, submitted: room.wrRecordings.has(pid),
+    }));
+
   room.roundResult = {
-    word: room.wrWord,
-    speakerId: spId, speakerName: speaker?.name ?? '',
-    speakerSuccess, thumbsUp, thumbsDown, noAudio: !room.wrSpeakerAudio,
+    word: room.wrWord, ranking,
     scores: [...room.players.values()].map(p => ({ id: p.id, name: p.name, score: p.score })),
   };
   room.phase = 'round_result';
   broadcastRoom(room);
-  setPhaseTimer(room, 8000, () => advanceFromResult(room));
+  setPhaseTimer(room, 10000, () => advanceFromResult(room));
 }
 
 function advanceFromResult(room) {
@@ -806,7 +829,7 @@ io.on('connection', socket => {
         socket.emit('wi_your_turn', { clueIdx: room.wiCurrentClueIdx });
       }
     }
-    if (['wr_show','wr_record'].includes(room.phase) && room.speakerOrder[room.speakerIdx] === playerId && room.wrWord)
+    if (['wr_show','wr_record'].includes(room.phase) && room.wrWord)
       socket.emit('wr_your_word', { word: room.wrWord });
     if (room.phase === 'telephone_chain') {
       const myIdx = room.telephoneChain.indexOf(playerId);
@@ -1024,20 +1047,10 @@ io.on('connection', socket => {
   socket.on('wr_audio', ({ audioBase64 }) => {
     const room = roomOf(socket);
     if (!room || room.phase !== 'wr_record') return;
-    if (room.speakerOrder[room.speakerIdx] !== socket.playerId) return;
-    room.wrSpeakerAudio = audioBase64;
-    startWrVote(room);
-  });
-
-  socket.on('wr_vote', ({ thumbsUp }) => {
-    const room = roomOf(socket);
-    if (!room || room.phase !== 'wr_vote') return;
-    if (room.speakerOrder[room.speakerIdx] === socket.playerId) return;
-    if (room.wrVotes.has(socket.playerId)) return;
-    room.wrVotes.set(socket.playerId, !!thumbsUp);
+    if (room.wrRecordings.has(socket.playerId)) return;
+    room.wrRecordings.set(socket.playerId, audioBase64);
     broadcastRoom(room);
-    const nonSpeakerCount = [...room.players.keys()].filter(id => id !== room.speakerOrder[room.speakerIdx]).length;
-    if (room.wrVotes.size >= nonSpeakerCount) finalizeWrVote(room);
+    if (room.wrRecordings.size >= room.players.size) finalizeWrRecordings(room);
   });
 
   socket.on('wi_imposter_guess', ({ guess }) => {
@@ -1104,7 +1117,7 @@ io.on('connection', socket => {
     if (room.hostId !== socket.playerId) return;
     for (const p of room.players.values()) { p.score = 0; p.ready = false; }
     room.currentRound = 0; room.usedCelebs = [];
-    room.wrWord = null; room.wrSpeakerAudio = null; room.wrVotes.clear();
+    room.wrWord = null; room.wrRecordings.clear();
     room.speakerOrder = shuffle([...room.players.keys()]);
     startRound(room);
   });
@@ -1115,7 +1128,7 @@ io.on('connection', socket => {
     if (room.hostId !== socket.playerId) return;
     for (const p of room.players.values()) { p.score = 0; p.ready = false; }
     room.currentRound = 0; room.usedCelebs = [];
-    room.wrWord = null; room.wrSpeakerAudio = null; room.wrVotes.clear();
+    room.wrWord = null; room.wrRecordings.clear();
     room.phase = 'lobby';
     clearPhaseTimer(room);
     broadcastRoom(room);
@@ -1169,7 +1182,7 @@ io.on('connection', socket => {
     room.wiAssignments.clear(); room.wiWords.clear(); room.wiClues.clear(); room.wiVotes.clear();
     room.wiEliminated = []; room.wiCycleCount = 0; room.wiCurrentClueIdx = 0; room.wiClueOrder = [];
     room.wiCivilianWord = null; room.wiImposterWord = null;
-    room.wrWord = null; room.wrSpeakerAudio = null; room.wrVotes.clear();
+    room.wrWord = null; room.wrRecordings.clear();
     broadcastRoom(room);
   });
 
